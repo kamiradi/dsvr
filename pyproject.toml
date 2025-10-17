@@ -1,7 +1,7 @@
 [project]
 name = "dsvr"
 version = "0.1.0"
-description = "Datasets, results and visualisation for robotics"
+description = "Datasets, results and visualisation for perosnal robotics projects"
 authors = [
     {name = "Aditya Kamireddypalli"}
 ]
