@@ -5,6 +5,8 @@ import numpy as np
 import os
 from urllib.parse import quote as _q, unquote as _uq
 
+DATASET_VERSION = "1.2"
+
 @dataclass
 class RoboticsDatasetV2:
     """

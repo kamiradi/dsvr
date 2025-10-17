@@ -6,6 +6,132 @@ import os
 from urllib.parse import quote as _q, unquote as _uq
 
 @dataclass
+class ADDResultV2:
+    """
+    Hierarchical ADD results: K measurements, each with N particles.
+
+    Fixed shapes:
+      - add_measures:  (K, N)         float
+      - gt_poses:      (K, N, 4, 4)   float
+      - est_poses:     (K, N, 4, 4)   float
+      - measurement_ids: (K,)         int  (per-measurement)
+    """
+    add_measures: np.ndarray
+    gt_poses: np.ndarray
+    est_poses: np.ndarray
+    measurement_ids: np.ndarray
+
+    # ---------- Constructors ----------
+    @classmethod
+    def empty(cls, num_particles: int, float_dtype=float, id_dtype=np.int64) -> "ADDResult":
+        N = int(num_particles)
+        if N <= 0:
+            raise ValueError("num_particles must be > 0")
+        return cls(
+            add_measures=np.empty((0, N), dtype=float_dtype),
+            gt_poses=np.empty((0, N, 4, 4), dtype=float_dtype),
+            est_poses=np.empty((0, N, 4, 4), dtype=float_dtype),
+            measurement_ids=np.empty((0,), dtype=id_dtype),
+        )
+
+    # ---------- Append one measurement (with N particles) ----------
+    def add_measurement(
+        self,
+        measurement_id: int,
+        add_measures: np.ndarray,   # (N,)
+        gt_poses: np.ndarray,       # (N, 4, 4)
+        est_poses: np.ndarray,      # (N, 4, 4)
+    ) -> None:
+        add_measures = np.asarray(add_measures)
+        gt_poses = np.asarray(gt_poses)
+        est_poses = np.asarray(est_poses)
+
+        K_curr = self.add_measures.shape[0]
+        N_expected = self.add_measures.shape[1] if K_curr > 0 else add_measures.shape[0]
+
+        # Shape checks
+        if add_measures.shape != (N_expected,):
+            raise ValueError(f"add_measures shape {add_measures.shape} != expected {(N_expected,)}")
+        if gt_poses.shape != (N_expected, 4, 4):
+            raise ValueError(f"gt_poses shape {gt_poses.shape} != expected {(N_expected, 4, 4)}")
+        if est_poses.shape != (N_expected, 4, 4):
+            raise ValueError(f"est_poses shape {est_poses.shape} != expected {(N_expected, 4, 4)}")
+
+        # Append along K
+        self.add_measures = np.concatenate([self.add_measures, add_measures[None, ...]], axis=0)
+        self.gt_poses = np.concatenate([self.gt_poses, gt_poses[None, ...]], axis=0)
+        self.est_poses = np.concatenate([self.est_poses, est_poses[None, ...]], axis=0)
+        self.measurement_ids = np.concatenate(
+            [self.measurement_ids, np.array([measurement_id], dtype=self.measurement_ids.dtype)], axis=0
+        )
+
+    # ---------- Accessors ----------
+    def get_measurement(self, k: int) -> Dict[str, Any]:
+        """Return dict for measurement k with arrays of shape (N, ...)."""
+        return {
+            "measurement_id": int(self.measurement_ids[k]),
+            "add_measures": self.add_measures[k],  # (N,)
+            "gt_poses": self.gt_poses[k],          # (N, 4, 4)
+            "est_poses": self.est_poses[k],        # (N, 4, 4)
+        }
+
+    # ---------- I/O ----------
+    def save(self, path: str) -> None:
+        """Compressed, pickle-free save."""
+        np.savez_compressed(
+            path,
+            add_measures=self.add_measures,
+            gt_poses=self.gt_poses,
+            est_poses=self.est_poses,
+            measurement_ids=self.measurement_ids,
+        )
+
+    @classmethod
+    def load(cls, path: str) -> "ADDResult":
+        """Pickle-free load (arrays must be numeric/fixed-shape)."""
+        data = np.load(path, allow_pickle=False)
+        return cls(
+            add_measures=data["add_measures"],
+            gt_poses=data["gt_poses"],
+            est_poses=data["est_poses"],
+            measurement_ids=data["measurement_ids"],
+        )
+
+    # ---------- Convenience ----------
+    def __len__(self) -> int:
+        """Total number of particles = K * N."""
+        return int(self.add_measures.shape[0] * self.add_measures.shape[1])
+
+    @property
+    def K(self) -> int:
+        """Number of measurements."""
+        return self.add_measures.shape[0]
+
+    @property
+    def N(self) -> int:
+        """Particles per measurement (fixed)."""
+        return self.add_measures.shape[1] if self.K > 0 else 0
+
+    # ---------- Summary ----------
+    def summary(self) -> str:
+        if self.K == 0:
+            return "ADDResult (hierarchical): [empty]"
+        add = self.add_measures
+        add_min = float(add.min()) if add.size else None
+        add_max = float(add.max()) if add.size else None
+        add_mean = float(add.mean()) if add.size else None
+        mid_min, mid_max = (int(self.measurement_ids.min()), int(self.measurement_ids.max())) if self.measurement_ids.size else (None, None)
+        return (
+            "ADDResult (hierarchical):\n"
+            f"  Measurements (K): {self.K}\n"
+            f"  Particles per measurement (N): {self.N}\n"
+            f"  Pose shape: (4, 4)\n"
+            f"  ADD stats: min={add_min}, max={add_max}, mean={add_mean}\n"
+            f"  Measurement ID range: ({mid_min}, {mid_max})"
+        )
+
+
+@dataclass
 class VisionInferenceResultV3:
     """
     Hierarchical result: K measurements, each with N particles.
