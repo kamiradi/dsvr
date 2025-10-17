@@ -1,7 +1,7 @@
 import rerun as rr
 import rerun.blueprint as rrb
 import numpy as np
-from robot_data import RoboticsDatasetV2
+from dsvr.datasets.robot_data import RoboticsDatasetV2
 import argparse
 from urllib.parse import quote as _q, unquote as _uq
 from vis_utils import depth_to_pointcloud, filter_pointcloud_bbox
