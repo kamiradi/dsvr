@@ -1,14 +1,25 @@
 import rerun as rr
 import rerun.blueprint as rrb
 import numpy as np
-from robot_data import RoboticsDatasetV2, VisionInferenceResultV3
+from dsvr.datasets.robot_data import RoboticsDatasetV2
+from dsvr.results.robot_results import VisionInferenceResultV3
 import argparse
 from urllib.parse import quote as _q, unquote as _uq
 
 ap = argparse.ArgumentParser()
 ap.add_argument("data_npz", help="Path to dataset .npz saved by RoboticsDataset")
 ap.add_argument("result_npz", help="Path to result .npz saved by RoboticsDataset")
+
+# add boolean argument if the pose of the particles are in camera frame
+ap.add_argument("--camera_frame", action='store_true', help="If set, particle poses are in camera frame")
+
 args = ap.parse_args()
+
+# some useful colors
+particle_color = [200, 200, 255]
+ground_truth_color = [0, 255, 0]
+estimate_color = [0, 0, 200, 100]
+
 
 rr.init("results", spawn=True)
 # Load dataset
@@ -66,9 +77,13 @@ for k in range(T):
     #                                                        meter=1,
     #                                                        colormap="viridis"))
     for i, t in enumerate(res.poses[ts_ind]):
+        if args.camera_frame:
+            # transform to world frame
+            t = X_Cam @ t
         translation = t[:3, 3]
         rotation = t[:3, :3]
         ent = f"world/particle_{i}"
+        gt = f"world/ground_truth"
         rr.log(
             f"{ent}",
             rr.Transform3D(
@@ -76,10 +91,22 @@ for k in range(T):
                 translation=translation,
             ),
         )
+        rr.log(
+            f"{gt}",
+            rr.Transform3D(
+                mat3x3=np.eye(3),
+                translation=[0.55, 0.0, 0.02],
+            ),
+        )
         rr.log(f"{ent}/geom", rr.Boxes3D(
             centers=[[0.0, 0.0, 0.0]],
             half_sizes=[half_size],
-            colors=[[200, 200, 255]],   # optional tint
+            colors=[particle_color],   # optional tint
+        ))
+        rr.log(f"{gt}/geom", rr.Boxes3D(
+            centers=[[0.0, 0.0, 0.0]],
+            half_sizes=[half_size],
+            colors=[ground_truth_color],   # optional tint
         ))
 
     for i, score in enumerate(res.unnormalised_log_pdfs[ts_ind]):
