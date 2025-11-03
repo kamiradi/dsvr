@@ -1,7 +1,8 @@
 import rerun as rr
 import rerun.blueprint as rrb
 import numpy as np
-from robot_data import RoboticsDatasetV2, VisionInferenceResultV3
+from dsvr.datasets.robot_data import RoboticsDatasetV2
+from dsvr.results.robot_results import VisionInferenceResultV3
 import argparse
 from urllib.parse import quote as _q, unquote as _uq
 
