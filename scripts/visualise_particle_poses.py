@@ -16,7 +16,7 @@ ap.add_argument("--camera_frame", action='store_true', help="If set, particle po
 args = ap.parse_args()
 
 # some useful colors
-particle_color = [200, 200, 255]
+particle_color = [10, 10, 10]
 ground_truth_color = [0, 255, 0]
 estimate_color = [0, 0, 200, 100]
 
