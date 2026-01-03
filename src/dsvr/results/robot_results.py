@@ -465,3 +465,185 @@ class ForceTorqueInferenceResultV2:
             f"  Measurement ID range (per-particle): ({mid_min}, {mid_max})"
         )
 
+@dataclass
+class ForceTorqueInferenceResultV3:
+    """
+    Hierarchical result: K measurements, each with N particles.
+
+    Fixed shapes:
+      - poses:                 (K, N, 4, 4)       float
+      - times:                 (K, N)             float (seconds)
+      - ft_trajectories:       (K, N, T, 6)       float (Fx,Fy,Fz,Tx,Ty,Tz)
+      - gt_ft_trajectories:    (K, N, T, 6)       float (ground truth Fx,Fy,Fz,Tx,Ty,Tz)
+      - unnormalised_log_pdfs: (K, N)             float
+      - measurement_ids:       (K,)               int  (per-particle, kept to match prior API)
+      - probe_poses:           (K, 4, 4)          float (ground truth pose for each measurement)
+
+    Notes:
+      * N (particles per measurement) is fixed across the dataset.
+      * T (trajectory length) is fixed across the dataset.
+      * Use add_measurement(...) to append one full measurement (N particles).
+      * You can pass a scalar measurement_id or an (N,) array; scalars broadcast.
+    """
+    poses: np.ndarray
+    times: np.ndarray
+    ft_trajectories: np.ndarray
+    gt_ft_trajectories: np.ndarray
+    unnormalised_log_pdfs: np.ndarray
+    measurement_ids: np.ndarray
+    probe_poses: np.ndarray
+
+    # ---------- Constructors ----------
+    @classmethod
+    def empty(
+        cls,
+        num_particles: int,
+        traj_len: int,
+        float_dtype=float,
+        id_dtype=np.int64,
+    ) -> "ForceTorqueInferenceResultV3":
+        N = int(num_particles)
+        T = int(traj_len)
+        if N <= 0:
+            raise ValueError("num_particles must be > 0")
+        if T <= 0:
+            raise ValueError("traj_len must be > 0")
+
+        return cls(
+            poses=np.empty((0, N, 4, 4), dtype=float_dtype),
+            times=np.empty((0, N), dtype=float_dtype),
+            ft_trajectories=np.empty((0, N, T, 6), dtype=float_dtype),
+            gt_ft_trajectories=np.empty((0, N, T, 6), dtype=float_dtype),
+            unnormalised_log_pdfs=np.empty((0, N), dtype=float_dtype),
+            measurement_ids=np.empty((0,), dtype=id_dtype),
+            probe_poses=np.empty((0, 4, 4), dtype=float_dtype),
+        )
+
+    # ---------- Append one measurement (with N particles) ----------
+    def add_measurement(
+        self,
+        poses: np.ndarray,                   # (N, 4, 4)
+        times: np.ndarray,                   # (N,)
+        ft_trajectories: np.ndarray,         # (N, T, 6)
+        gt_ft_trajectories: np.ndarray,      # (N, T, 6)
+        unnormalised_log_pdfs: np.ndarray,   # (N,)
+        measurement_id: int,
+        probe_pose: np.ndarray,              # (4, 4)
+    ) -> None:
+        poses = np.asarray(poses)
+        times = np.asarray(times)
+        ft_trajectories = np.asarray(ft_trajectories)
+        gt_ft_trajectories = np.asarray(gt_ft_trajectories)
+        unnormalised_log_pdfs = np.asarray(unnormalised_log_pdfs)
+        probe_pose = np.asarray(probe_pose)
+
+        K_curr = self.poses.shape[0]
+        N_expected = self.poses.shape[1] if K_curr > 0 else poses.shape[0]
+        T_expected = self.ft_trajectories.shape[2] if K_curr > 0 else ft_trajectories.shape[1]
+
+        # Validate shapes
+        if poses.shape != (N_expected, 4, 4):
+            raise ValueError(f"poses shape {poses.shape} != expected {(N_expected, 4, 4)}")
+        if times.shape != (N_expected,):
+            raise ValueError(f"times shape {times.shape} != expected {(N_expected,)}")
+        if ft_trajectories.shape != (N_expected, T_expected, 6):
+            raise ValueError(f"ft_trajectories shape {ft_trajectories.shape} != expected {(N_expected, T_expected, 6)}")
+        if gt_ft_trajectories.shape != (N_expected, T_expected, 6):
+            raise ValueError(f"gt_ft_trajectories shape {gt_ft_trajectories.shape} != expected {(N_expected, T_expected, 6)}")
+        if unnormalised_log_pdfs.shape != (N_expected,):
+            raise ValueError(f"unnormalised_log_pdfs shape {unnormalised_log_pdfs.shape} != expected {(N_expected,)}")
+        if probe_pose.shape != (4, 4):
+            raise ValueError(f"probe_pose shape {probe_pose.shape} != expected (4, 4)")
+
+        # Append along K
+        self.poses = np.concatenate([self.poses, poses[None, ...]], axis=0)
+        self.times = np.concatenate([self.times, times[None, ...]], axis=0)
+        self.ft_trajectories = np.concatenate([self.ft_trajectories, ft_trajectories[None, ...]], axis=0)
+        self.gt_ft_trajectories = np.concatenate([self.gt_ft_trajectories, gt_ft_trajectories[None, ...]], axis=0)
+        self.unnormalised_log_pdfs = np.concatenate([self.unnormalised_log_pdfs, unnormalised_log_pdfs[None, ...]], axis=0)
+        self.measurement_ids = np.concatenate(
+            [self.measurement_ids, np.array([measurement_id], dtype=self.measurement_ids.dtype)], axis=0
+        )
+        self.probe_poses = np.concatenate([self.probe_poses, probe_pose[None, ...]], axis=0)
+
+    # ---------- Accessors ----------
+    def get_measurement(self, k: int) -> Dict[str, Any]:
+        """Return dict for measurement k with arrays of shape (N, ...)."""
+        return {
+            "poses": self.poses[k],                       # (N, 4, 4)
+            "times": self.times[k],                       # (N,)
+            "ft_trajectories": self.ft_trajectories[k],   # (N, T, 6)
+            "gt_ft_trajectories": self.gt_ft_trajectories[k],  # (N, T, 6)
+            "unnormalised_log_pdfs": self.unnormalised_log_pdfs[k],  # (N,)
+            "measurement_ids": self.measurement_ids[k],   # (N,)
+            "probe_pose": self.probe_poses[k],            # (4, 4)
+        }
+
+    # ---------- I/O ----------
+    def save(self, path: str) -> None:
+        """Compressed, pickle-free save."""
+        np.savez_compressed(
+            path,
+            poses=self.poses,
+            times=self.times,
+            ft_trajectories=self.ft_trajectories,
+            gt_ft_trajectories=self.gt_ft_trajectories,
+            unnormalised_log_pdfs=self.unnormalised_log_pdfs,
+            measurement_ids=self.measurement_ids,
+            probe_poses=self.probe_poses,
+        )
+
+    @classmethod
+    def load(cls, path: str) -> "ForceTorqueInferenceResultV3":
+        """Pickle-free load (arrays must be numeric/fixed-shape)."""
+        data = np.load(path, allow_pickle=False)
+        return cls(
+            poses=data["poses"],
+            times=data["times"],
+            ft_trajectories=data["ft_trajectories"],
+            gt_ft_trajectories=data["gt_ft_trajectories"],
+            unnormalised_log_pdfs=data["unnormalised_log_pdfs"],
+            measurement_ids=data["measurement_ids"],
+            probe_poses=data["probe_poses"],
+        )
+
+    # ---------- Convenience ----------
+    def __len__(self) -> int:
+        """Total number of particles = K * N."""
+        return int(self.poses.shape[0] * self.poses.shape[1])
+
+    @property
+    def K(self) -> int:
+        """Number of measurements."""
+        return self.poses.shape[0]
+
+    @property
+    def N(self) -> int:
+        """Particles per measurement (fixed)."""
+        return self.poses.shape[1] if self.K > 0 else 0
+
+    @property
+    def T(self) -> int:
+        """Trajectory length (fixed)."""
+        return self.ft_trajectories.shape[2] if self.K > 0 else 0
+
+    def summary(self) -> str:
+        if self.K == 0:
+            return "ForceTorqueInferenceResultV3 (hierarchical): [empty]"
+        t_min, t_max = (self.times.min(), self.times.max()) if self.times.size else (None, None)
+        lp_min, lp_max = (self.unnormalised_log_pdfs.min(), self.unnormalised_log_pdfs.max()) if self.unnormalised_log_pdfs.size else (None, None)
+        mid_min, mid_max = (self.measurement_ids.min(), self.measurement_ids.max()) if self.measurement_ids.size else (None, None)
+        return (
+            "ForceTorqueInferenceResultV3 (hierarchical):\n"
+            f"  Measurements (K): {self.K}\n"
+            f"  Particles per measurement (N): {self.N}\n"
+            f"  Trajectory length (T): {self.T}\n"
+            f"  Pose shape: {self.poses.shape}\n"
+            f"  F/T shape : {self.ft_trajectories.shape}\n"
+            f"  GT F/T shape : {self.gt_ft_trajectories.shape}\n"
+            f"  log-pdf shape : {self.unnormalised_log_pdfs.shape}\n"
+            f"  Probe pose shape: {self.probe_poses.shape}\n"
+            f"  Time range: ({t_min}, {t_max})\n"
+            f"  Unnormalised log-pdf range: ({lp_min}, {lp_max})\n"
+            f"  Measurement ID range (per-particle): ({mid_min}, {mid_max})"
+        )
