@@ -86,6 +86,29 @@ for i in range(T):
 #     rr.set_time("frame", duration=float(t))
 #     rr.log(f"{cam_ent}/depth", rr.DepthImage(d, meter=0.5))
 
+# rr.log("trig/sin", rr.SeriesLines(color=[255, 0, 0], name="sin(0.01t)"), static=True)
+# rr.log("trig/cos", rr.SeriesLines(color=[0, 255, 0], name="cos(0.01t)"), static=True)
+FORCE_TORQUE = {
+    "Fx": (0.121, 0.466, 0.705),  # blue
+    "Fy": (0.173, 0.627, 0.173),  # green
+    "Fz": (0.090, 0.745, 0.811),  # cyan
+    "Tx": (0.839, 0.153, 0.157),  # red
+    "Ty": (1.000, 0.498, 0.054),  # orange
+    "Tz": (0.580, 0.404, 0.741),  # purple
+}
+
+rr.log("world/ft/fx", rr.SeriesLines(colors=FORCE_TORQUE["Fx"], widths=2, names="fx"),
+       static=True)
+rr.log("world/ft/fy", rr.SeriesLines(colors=FORCE_TORQUE["Fy"],widths=2,
+                                     names="fy"), static=True)
+rr.log("world/ft/fz", rr.SeriesLines(colors=FORCE_TORQUE["Fz"],widths=2,
+                                     names="fz"), static=True)
+rr.log("world/ft/tx", rr.SeriesLines(colors=FORCE_TORQUE["Tx"],widths=2,
+                                     names="tx"), static=True)
+rr.log("world/ft/ty", rr.SeriesLines(colors=FORCE_TORQUE["Ty"],widths=2,
+                                     names="ty"), static=True)
+rr.log("world/ft/tz", rr.SeriesLines(colors=FORCE_TORQUE["Tz"],widths=2,
+                                     names="tz"), static=True)
 
 
 for sample, t in zip(ds.ft, ds.ft_ts):

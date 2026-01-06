@@ -94,8 +94,8 @@ for k in range(T):
         rr.log(
             f"{gt}",
             rr.Transform3D(
-                mat3x3=np.eye(3),
-                translation=[0.55, 0.0, 0.02],
+                mat3x3=hole_mats[0][:3, :3],
+                translation=hole_mats[0][:3, 3],
             ),
         )
         rr.log(f"{ent}/geom", rr.Boxes3D(
