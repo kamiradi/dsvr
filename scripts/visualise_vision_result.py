@@ -1,5 +1,6 @@
 import rerun as rr
 import sys
+import os
 import numpy as np
 from dsvr.datasets.robot_data import RoboticsDatasetV2
 from dsvr.results.robot_results import VisionInferenceResultV3
@@ -8,11 +9,43 @@ from urllib.parse import quote as _q, unquote as _uq
 import matplotlib.pyplot as plt
 from matplotlib import cm
 from matplotlib.colors import Normalize
+from typing import Dict
+from rerun.urdf import UrdfTree
 
 
 ap = argparse.ArgumentParser()
 ap.add_argument("data_npz", help="Path to dataset .npz saved by RoboticsDataset")
 ap.add_argument("result_npz", help="Path to result .npz saved by Result")
+ap.add_argument(
+    "--urdf",
+    type=str,
+    default=os.path.expanduser("~/Documents/workspace/iiwa_description/urdf/iiwa14.urdf"),
+    help="Path to URDF file (default: ~/Documents/workspace/iiwa_description/urdf/iiwa14.urdf)",
+)
+ap.add_argument(
+    "--root-path",
+    type=str,
+    default="world/robot",
+    help="Root entity path for the robot in Rerun (default: world/robot)",
+)
+ap.add_argument(
+    "--start",
+    type=int,
+    default=800,
+    help="Start frame index (default: 800)",
+)
+ap.add_argument(
+    "--end",
+    type=int,
+    default=1000,
+    help="End frame index (default: 1000)",
+)
+ap.add_argument(
+    "--step",
+    type=int,
+    default=4,
+    help="Frame step (default: 4)",
+)
 args = ap.parse_args()
 
 # some useful colors
@@ -20,17 +53,28 @@ particle_color = [10, 10, 10]
 ground_truth_color = [0, 255, 0]
 estimate_color = [0, 0, 200, 100]
 
-# Save .rrd file in same directory as result_npz
-from pathlib import Path
-result_path = Path(args.result_npz)
-rrd_path = result_path.with_suffix(".rrd")
-
-rr.init("results")
-rr.save(str(rrd_path))
+rr.init("results", spawn=True)
 # Load dataset
 res = VisionInferenceResultV3.load(args.result_npz)
 ds = RoboticsDatasetV2.load(args.data_npz)
-rr.log("world", rr.ViewCoordinates.RIGHT_HAND_Y_UP)
+rr.log("world", rr.ViewCoordinates.RIGHT_HAND_Z_UP, static=True)
+rr.log("world", rr.Transform3D(translation=[0, 0, 0]), static=True)
+rr.log("world", rr.CoordinateFrame("world"), static=True)
+rr.log("camera", rr.CoordinateFrame("camera"))
+rr.log("particles", rr.CoordinateFrame("particles"))
+rr.log("gt", rr.CoordinateFrame("gt") )
+rr.log("sampled_image", rr.CoordinateFrame("sampled_image") )
+
+# Load and setup URDF robot visualization
+rr.log_file_from_path(args.urdf, entity_path_prefix=args.root_path, static=True)
+urdf_tree = UrdfTree.from_file_path(args.urdf)
+
+# Get joint names from URDF tree
+joint_names = [joint.name for joint in urdf_tree.joints() if joint.joint_type in ("revolute", "continuous", "prismatic")]
+print(f"Loaded URDF with actuated joints: {joint_names}")
+
+# Build joint name to index mapping
+joint_name_to_idx: Dict[str, int] = {name: i for i, name in enumerate(joint_names)}
 
 # initialize camera parameters
 cam_ent = "world/camera"
@@ -49,10 +93,24 @@ hole_times, hole_mats = ds.se3_traj['X_Hole']
 T = mats.shape[0]
 count=0
 half_size = np.array([0.04, 0.04, 0.025])
-# for measurement in res.measurement_ids:
-# iterate through all transforms
-# for k in range(T):
-frame_range = range(800, 1000, 4)
+
+# Log static identity transforms for parent entities to establish transform hierarchy
+# rr.log("world/origin", rr.Transform3D(translation=[0, 0, 0]), static=True)
+rr.log(
+    "world/origin/",
+    rr.Arrows3D(
+        vectors=[[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+        colors=[[255, 0, 0], [0, 255, 0], [0, 0, 255]],
+        origins=[[0, 0, 0], [0, 0, 0], [0, 0, 0]],
+    ),
+    rr.Transform3D(translation=[0, 0, 0]),
+    static=True)
+rr.log("world/particles", rr.Transform3D(translation=[0, 0, 0]), static=True)
+rr.log("world/sampled_image", rr.Transform3D(translation=[0, 0, 0]), static=True)
+rr.log("world/pixelwise", rr.Transform3D(translation=[0, 0, 0]), static=True)
+rr.log(cam_ent, rr.Transform3D(translation=[0, 0, 0]))
+
+frame_range = range(args.start, args.end, args.step)
 total_frames = len(frame_range)
 for k in frame_range:
     d = times[k]
@@ -69,21 +127,24 @@ for k in frame_range:
             ts_ind = ts
             break
     # Explicitly draw a coordinate frame at the world origin
-    rr.log("world/origin", rr.Transform3D(translation=[0,0,0]))
+    # rr.log("world/origin", rr.Transform3D(translation=[0,0,0]))
 
-    # Add axes (length in meters)
-    rr.log("world/origin/axes", rr.Arrows3D(
-        vectors=[[1,0,0],[0,1,0],[0,0,1]],
-        colors=[[255,0,0],[0,255,0],[0,0,255]],  # X=red, Y=green, Z=blue
-        origins=[[0,0,0],[0,0,0],[0,0,0]],
-    ))
+    # # Add axes (length in meters)
+    # rr.log(
+    #     "world/origin/axes",
+    #     rr.Arrows3D(
+    #        vectors=[[1,0,0],[0,1,0],[0,0,1]],
+    #         colors=[[255,0,0],[0,255,0],[0,0,255]],  # X=red, Y=green, Z=blue
+    #         origins=[[0,0,0],[0,0,0],[0,0,0]]),
+    #     rr.Transform3D(translation=[0,0,0]))
 
     # log particles poses and generated images
     for i, image in enumerate(res.images[ts_ind]):
-        rr.log(f"world/sampled_image/sample_image_{i}", rr.DepthImage(image, meter=0.5, colormap="turbo"))
+        rr.log(f"world/sampled_image/sample_image_{i}", rr.DepthImage(image,
+                                                                      meter=1.0, colormap="turbo"))
     for i, pixel_image in enumerate(res.pixelwise_score[ts_ind]):
         rr.log(f"world/pixelwise/pixelwise_score_{i}", rr.DepthImage(pixel_image,
-                                                           meter=1,
+                                                           meter=1.0,
                                                            colormap="viridis"))
     # iterating through particles
     for i, t in enumerate(res.poses[ts_ind]):
@@ -127,8 +188,6 @@ for k in frame_range:
         #rr.log("world/ft/fx", rr.Scalars(fx))
 
     # log relevant dataset
-    rr.log(f"{cam_ent}/rgb", rr.Image(ds.images[ts_ind]))
-    rr.log(f"{cam_ent}/depth", rr.DepthImage(ds.depth[ts_ind], meter=1.0))
     rr.log(
         f"{cam_ent}",
         rr.Transform3D(
@@ -144,11 +203,32 @@ for k in frame_range:
             camera_xyz=rr.ViewCoordinates.RDF
         ),
     )
+    rr.log(f"{cam_ent}/rgb", rr.Image(ds.images[ts_ind]))
+    rr.log(f"{cam_ent}/depth", rr.DepthImage(ds.depth[ts_ind], meter=1.0))
+    rr.log(f"{cam_ent}/rgb", rr.Transform3D(translation=[0, 0, 0]), static=True)
+    rr.log(f"{cam_ent}/depth", rr.Transform3D(translation=[0, 0, 0]), static=True)
+
+    # Log robot joint states if available
+    if ds.joint_states is not None and ds.joint_ts is not None:
+        # Find closest joint state timestamp to current frame time
+        joint_idx = 0
+        for ji in range(len(ds.joint_ts)):
+            if ds.joint_ts[ji] >= d:
+                joint_idx = ji
+                break
+        q = ds.joint_states[joint_idx]
+
+        # Log transforms for each joint
+        for joint in urdf_tree.joints():
+            if joint.name in joint_name_to_idx:
+                idx = joint_name_to_idx[joint.name]
+                if idx < len(q):
+                    angle = q[idx]
+                    transform = joint.compute_transform(angle)
+                    # can you print the data type of the transform?
+                    rr.log(f"{args.root_path}/{joint.child_link}", transform)
 
     count+=1
     print(f"\rProcessing frame {count}/{total_frames}...", end="", flush=True)
 
-print(f"\rDone! Saved {count} frames to: {rrd_path}")
-print(f"View with: rerun {rrd_path}")
-
-
+print(f"\rDone! Processed {count} frames.")
