@@ -25,7 +25,7 @@ ap.add_argument(
 ap.add_argument(
     "--root-path",
     type=str,
-    default="world/robot",
+    default="/world/robot",
     help="Root entity path for the robot in Rerun (default: world/robot)",
 )
 ap.add_argument(
@@ -58,12 +58,6 @@ rr.init("results", spawn=True)
 res = VisionInferenceResultV3.load(args.result_npz)
 ds = RoboticsDatasetV2.load(args.data_npz)
 rr.log("world", rr.ViewCoordinates.RIGHT_HAND_Z_UP, static=True)
-rr.log("world", rr.Transform3D(translation=[0, 0, 0]), static=True)
-rr.log("world", rr.CoordinateFrame("world"), static=True)
-rr.log("camera", rr.CoordinateFrame("camera"))
-rr.log("particles", rr.CoordinateFrame("particles"))
-rr.log("gt", rr.CoordinateFrame("gt") )
-rr.log("sampled_image", rr.CoordinateFrame("sampled_image") )
 
 # Load and setup URDF robot visualization
 rr.log_file_from_path(args.urdf, entity_path_prefix=args.root_path, static=True)
@@ -77,7 +71,7 @@ print(f"Loaded URDF with actuated joints: {joint_names}")
 joint_name_to_idx: Dict[str, int] = {name: i for i, name in enumerate(joint_names)}
 
 # initialize camera parameters
-cam_ent = "world/camera"
+cam_ent = "/world/camera"
 width = 640
 height = 480
 fov_y = np.pi/4
@@ -97,7 +91,7 @@ half_size = np.array([0.04, 0.04, 0.025])
 # Log static identity transforms for parent entities to establish transform hierarchy
 # rr.log("world/origin", rr.Transform3D(translation=[0, 0, 0]), static=True)
 rr.log(
-    "world/origin/",
+    "/world/origin/",
     rr.Arrows3D(
         vectors=[[1, 0, 0], [0, 1, 0], [0, 0, 1]],
         colors=[[255, 0, 0], [0, 255, 0], [0, 0, 255]],
@@ -105,10 +99,10 @@ rr.log(
     ),
     rr.Transform3D(translation=[0, 0, 0]),
     static=True)
-rr.log("world/particles", rr.Transform3D(translation=[0, 0, 0]), static=True)
-rr.log("world/sampled_image", rr.Transform3D(translation=[0, 0, 0]), static=True)
-rr.log("world/pixelwise", rr.Transform3D(translation=[0, 0, 0]), static=True)
-rr.log(cam_ent, rr.Transform3D(translation=[0, 0, 0]))
+# rr.log("/world/particles", rr.Transform3D(translation=[0, 0, 0]), static=True)
+# rr.log("/world/sampled_image", rr.Transform3D(translation=[0, 0, 0]), static=True)
+# rr.log("/world/pixelwise", rr.Transform3D(translation=[0, 0, 0]), static=True)
+# rr.log(cam_ent, rr.Transform3D(translation=[0, 0, 0]))
 
 frame_range = range(args.start, args.end, args.step)
 total_frames = len(frame_range)
@@ -140,18 +134,18 @@ for k in frame_range:
 
     # log particles poses and generated images
     for i, image in enumerate(res.images[ts_ind]):
-        rr.log(f"world/sampled_image/sample_image_{i}", rr.DepthImage(image,
+        rr.log(f"/world/sampled_image/sample_image_{i}", rr.DepthImage(image,
                                                                       meter=1.0, colormap="turbo"))
     for i, pixel_image in enumerate(res.pixelwise_score[ts_ind]):
-        rr.log(f"world/pixelwise/pixelwise_score_{i}", rr.DepthImage(pixel_image,
+        rr.log(f"/world/pixelwise/pixelwise_score_{i}", rr.DepthImage(pixel_image,
                                                            meter=1.0,
                                                            colormap="viridis"))
     # iterating through particles
     for i, t in enumerate(res.poses[ts_ind]):
         translation = t[:3, 3]
         rotation = t[:3, :3]
-        gt = f"world/ground_truth"
-        ent = f"world/particles/particle_{i}"
+        gt = f"/world/ground_truth"
+        ent = f"/world/particles/particle_{i}"
         rr.log(
             f"{ent}",
             rr.Transform3D(
@@ -184,7 +178,7 @@ for k in frame_range:
         ))
 
     for i, score in enumerate(res.unnormalised_log_pdfs[ts_ind]):
-        rr.log(f"world/scores/score_{i}", rr.Scalars(score))
+        rr.log(f"/world/scores/score_{i}", rr.Scalars(score))
         #rr.log("world/ft/fx", rr.Scalars(fx))
 
     # log relevant dataset
@@ -205,8 +199,8 @@ for k in frame_range:
     )
     rr.log(f"{cam_ent}/rgb", rr.Image(ds.images[ts_ind]))
     rr.log(f"{cam_ent}/depth", rr.DepthImage(ds.depth[ts_ind], meter=1.0))
-    rr.log(f"{cam_ent}/rgb", rr.Transform3D(translation=[0, 0, 0]), static=True)
-    rr.log(f"{cam_ent}/depth", rr.Transform3D(translation=[0, 0, 0]), static=True)
+    # rr.log(f"{cam_ent}/rgb", rr.Transform3D(translation=[0, 0, 0]), static=True)
+    # rr.log(f"{cam_ent}/depth", rr.Transform3D(translation=[0, 0, 0]), static=True)
 
     # Log robot joint states if available
     if ds.joint_states is not None and ds.joint_ts is not None:
@@ -231,4 +225,10 @@ for k in frame_range:
     count+=1
     print(f"\rProcessing frame {count}/{total_frames}...", end="", flush=True)
 
+rr.log("/", rr.CoordinateFrame("root"), static=True)
+rr.log("/", rr.Transform3D(translation=[0., 0., 0.],
+                           parent_frame="root",
+                           child_frame="world"), static=True)
+rr.log("/world", rr.Transform3D(translation=[0., 0., 0.],
+                                parent_frame="root",), static=True)
 print(f"\rDone! Processed {count} frames.")

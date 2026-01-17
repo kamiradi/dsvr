@@ -1,35 +1,59 @@
-"""Logs a simple transform hierarchy with named frames."""
-
 import rerun as rr
+from pathlib import Path
+import time
+import numpy as np
+import os
 
-rr.init("rerun_example_transform3d_hierarchy_named_frames", spawn=True)
+def log_urdf(rec: rr.RecordingStream, urdf_path: Path, entity_path_prefix: str) -> None:
+    # this creates a transform tree based on coordinate frame names
+    # look at entity_path_prefix/<urdf_root> for coordinate frame, everything here is relative to that
+    rec.log_file_from_path(urdf_path, entity_path_prefix=entity_path_prefix, static=True)
 
-# Define entities with explicit coordinate frames.
-rr.log(
-    "sun",
-    rr.Ellipsoids3D(half_sizes=[1, 1, 1], colors=[255, 200, 10], fill_mode="solid"),
-    rr.CoordinateFrame("sun_frame"),
-)
-rr.log(
-    "planet",
-    rr.Ellipsoids3D(half_sizes=[0.4, 0.4, 0.4], colors=[40, 80, 200], fill_mode="solid"),
-    rr.CoordinateFrame("planet_frame"),
-)
-rr.log(
-    "moon",
-    rr.Ellipsoids3D(half_sizes=[0.15, 0.15, 0.15], colors=[180, 180, 180], fill_mode="solid"),
-    rr.CoordinateFrame("moon_frame"),
-)
+def log_disjoint_transforms(rec: rr.RecordingStream) -> None:
+    # this creates a transform tree based on entity paths
+    # / -> #tf
+    # /world -> #tf/world
+    # etc.
+    rec.log("/world/depth_1", rr.Transform3D(translation=[-.1, 0., 0.], parent_frame="root"), static=True)
+    rec.log("/world/depth_1/depth_2", rr.Transform3D(translation=[0., -.1, 0.]), static=True)
+    K = np.zeros((3, 3))
+    K[0, 0] = 500.0  # fx
+    K[1, 1] = 500.0  # fy
+    K[0, 2] = 320.0  # cx
+    K[1, 2] = 240.0  # cy
+    K[2, 2] = 1.0
+    rec.log("/world/depth_1/depth_2/camera", rr.Transform3D(translation=[0., 0., .1]), rr.Pinhole(resolution=[640, 480], image_from_camera=K), static=True)
 
-# Define explicit frame relationships.
-rr.log(
-    "planet_transform",
-    rr.Transform3D(translation=[6.0, 0.0, 0.0], child_frame="planet_frame", parent_frame="sun_frame"),
-)
-rr.log(
-    "moon_transform", rr.Transform3D(translation=[3.0, 0.0, 0.0], child_frame="moon_frame", parent_frame="planet_frame")
-)
+def main() -> None:
+    with rr.RecordingStream("mixed_transform_example") as rec:
+        rec.spawn()
 
-# Connect the viewer to the sun's coordinate frame.
-# This is only needed in the absence of blueprints since a default view will typically be created at `/`.
-rr.log("/", rr.CoordinateFrame("sun_frame"), static=True)
+        # Add URDF
+        log_urdf(rec, os.path.expanduser("~/Documents/workspace/iiwa_description/urdf/iiwa14.urdf"), entity_path_prefix="/world/robot")
+        # Add manual transforms (based on entity paths)
+        log_disjoint_transforms(rec)
+        # Connect our two trees
+        #   First make / root instead of #tf
+        rec.log("/", rr.CoordinateFrame("root"), static=True)
+        #   Then connect / to to entity_path_prefix/<urdf_root> via name
+        rec.log("/", rr.Transform3D(translation=[0., 0., 0.],
+                                    parent_frame="root",
+                                    child_frame="world"), static=True)
+        #   Then connect /world to / via mixed names and entity paths
+        rec.log("/world", rr.Transform3D(translation=[0., 0., 0.], parent_frame="root",), static=True)
+        # This appears to not work because each entity can only have one coordinate frame
+        if False:
+            rec.log("/world", rr.Transform3D(translation=[0., 0., 0.], parent_frame="world", child_frame="base"), rr.CoordinateFrame("world"), static=True)
+
+        rec.set_time("frame", sequence=0)
+        rec.log("/world/depth_1/depth_2/camera", rr.Image((255 * np.random.rand(480, 640)).astype(np.uint8)))
+
+        rec.set_time("frame", sequence=1)
+        rec.log("/world/depth_1/depth_2/camera", rr.Image((255 * np.random.rand(480, 640)).astype(np.uint8)))
+
+        rec.flush()
+    while True:
+        time.sleep(1)
+
+if __name__ == "__main__":
+    main()
