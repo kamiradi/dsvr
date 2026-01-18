@@ -46,6 +46,12 @@ ap.add_argument(
     default=4,
     help="Frame step (default: 4)",
 )
+ap.add_argument(
+    "--peg-mesh",
+    type=str,
+    default=os.path.expanduser("~/Documents/workspace/assembly_description/urdf/meshes/rectangular_peg.obj"),
+    help="Path to peg mesh OBJ file",
+)
 args = ap.parse_args()
 
 # some useful colors
@@ -84,6 +90,7 @@ K = np.array([[f_x, s,  c_x],
 
 times, mats = ds.se3_traj['X_Camera']
 hole_times, hole_mats = ds.se3_traj['X_Hole']
+peg_times, peg_mats = ds.se3_traj['X_Peg']
 T = mats.shape[0]
 count=0
 half_size = np.array([0.04, 0.04, 0.025])
@@ -103,6 +110,10 @@ rr.log(
 # rr.log("/world/sampled_image", rr.Transform3D(translation=[0, 0, 0]), static=True)
 # rr.log("/world/pixelwise", rr.Transform3D(translation=[0, 0, 0]), static=True)
 # rr.log(cam_ent, rr.Transform3D(translation=[0, 0, 0]))
+
+# Log peg mesh as static asset
+peg_ent = "/world/peg"
+rr.log(peg_ent, rr.Asset3D(path=args.peg_mesh), static=True)
 
 frame_range = range(args.start, args.end, args.step)
 total_frames = len(frame_range)
@@ -201,6 +212,16 @@ for k in frame_range:
     rr.log(f"{cam_ent}/depth", rr.DepthImage(ds.depth[ts_ind], meter=1.0))
     # rr.log(f"{cam_ent}/rgb", rr.Transform3D(translation=[0, 0, 0]), static=True)
     # rr.log(f"{cam_ent}/depth", rr.Transform3D(translation=[0, 0, 0]), static=True)
+
+    # Log peg pose
+    X_Peg = peg_mats[k]
+    rr.log(
+        peg_ent,
+        rr.Transform3D(
+            mat3x3=X_Peg[:3, :3],
+            translation=X_Peg[:3, 3],
+        ),
+    )
 
     # Log robot joint states if available
     if ds.joint_states is not None and ds.joint_ts is not None:

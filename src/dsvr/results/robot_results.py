@@ -647,3 +647,234 @@ class ForceTorqueInferenceResultV3:
             f"  Unnormalised log-pdf range: ({lp_min}, {lp_max})\n"
             f"  Measurement ID range (per-particle): ({mid_min}, {mid_max})"
         )
+
+
+@dataclass
+class ContactResidualResult:
+    """
+    Result class for contact location inference via residual computation.
+
+    Stores the residuals computed from force/torque measurements against
+    sampled points on a mesh surface.
+
+    Fixed shapes:
+      - mesh_points:          (P, 3)    float - sampled points on mesh
+      - mesh_normals:         (P, 3)    float - normals at each point
+      - residuals:            (T, P)    float - residual per timestep per point
+      - ft_values:            (T, 6)    float - force/torque values (Fx,Fy,Fz,Tx,Ty,Tz)
+      - times:                (T,)      float - timestamps
+      - contact_mask:         (T,)      uint8 - binary mask for contact timesteps
+      - min_residual_indices: (T,)      int   - index of min residual point per timestep
+      - min_residuals:        (T,)      float - minimum residual value per timestep
+
+    Notes:
+      * P is the number of sampled points on the mesh (fixed).
+      * T is the trajectory length (number of timesteps).
+    """
+    mesh_points: np.ndarray
+    mesh_normals: np.ndarray
+    residuals: np.ndarray
+    ft_values: np.ndarray
+    times: np.ndarray
+    contact_mask: np.ndarray
+    min_residual_indices: np.ndarray
+    min_residuals: np.ndarray
+
+    # ---------- Constructors ----------
+    @classmethod
+    def empty(
+        cls,
+        num_points: int,
+        float_dtype=np.float32,
+    ) -> "ContactResidualResult":
+        P = int(num_points)
+        if P <= 0:
+            raise ValueError("num_points must be > 0")
+
+        return cls(
+            mesh_points=np.empty((P, 3), dtype=float_dtype),
+            mesh_normals=np.empty((P, 3), dtype=float_dtype),
+            residuals=np.empty((0, P), dtype=float_dtype),
+            ft_values=np.empty((0, 6), dtype=float_dtype),
+            times=np.empty((0,), dtype=float_dtype),
+            contact_mask=np.empty((0,), dtype=np.uint8),
+            min_residual_indices=np.empty((0,), dtype=np.int64),
+            min_residuals=np.empty((0,), dtype=float_dtype),
+        )
+
+    @classmethod
+    def from_mesh(
+        cls,
+        mesh_points: np.ndarray,
+        mesh_normals: np.ndarray,
+        float_dtype=np.float32,
+    ) -> "ContactResidualResult":
+        """Create empty result with pre-loaded mesh points and normals."""
+        mesh_points = np.asarray(mesh_points, dtype=float_dtype)
+        mesh_normals = np.asarray(mesh_normals, dtype=float_dtype)
+        P = mesh_points.shape[0]
+
+        if mesh_points.shape != (P, 3):
+            raise ValueError(f"mesh_points shape {mesh_points.shape} invalid, expected (P, 3)")
+        if mesh_normals.shape != (P, 3):
+            raise ValueError(f"mesh_normals shape {mesh_normals.shape} != mesh_points shape")
+
+        return cls(
+            mesh_points=mesh_points,
+            mesh_normals=mesh_normals,
+            residuals=np.empty((0, P), dtype=float_dtype),
+            ft_values=np.empty((0, 6), dtype=float_dtype),
+            times=np.empty((0,), dtype=float_dtype),
+            contact_mask=np.empty((0,), dtype=np.uint8),
+            min_residual_indices=np.empty((0,), dtype=np.int64),
+            min_residuals=np.empty((0,), dtype=float_dtype),
+        )
+
+    # ---------- Append timesteps ----------
+    def add_timestep(
+        self,
+        residuals: np.ndarray,      # (P,)
+        ft_value: np.ndarray,       # (6,)
+        time: float,
+        contact: bool,
+    ) -> None:
+        """Add a single timestep of residual data."""
+        residuals = np.asarray(residuals, dtype=self.residuals.dtype)
+        ft_value = np.asarray(ft_value, dtype=self.ft_values.dtype)
+
+        P = self.mesh_points.shape[0]
+        if residuals.shape != (P,):
+            raise ValueError(f"residuals shape {residuals.shape} != expected ({P},)")
+        if ft_value.shape != (6,):
+            raise ValueError(f"ft_value shape {ft_value.shape} != expected (6,)")
+
+        # Compute min residual info
+        min_idx = int(np.argmin(residuals))
+        min_val = float(residuals[min_idx])
+
+        self.residuals = np.concatenate([self.residuals, residuals[None, :]], axis=0)
+        self.ft_values = np.concatenate([self.ft_values, ft_value[None, :]], axis=0)
+        self.times = np.concatenate([self.times, np.array([time], dtype=self.times.dtype)])
+        self.contact_mask = np.concatenate([self.contact_mask, np.array([int(contact)], dtype=np.uint8)])
+        self.min_residual_indices = np.concatenate([self.min_residual_indices, np.array([min_idx], dtype=np.int64)])
+        self.min_residuals = np.concatenate([self.min_residuals, np.array([min_val], dtype=self.min_residuals.dtype)])
+
+    def add_batch(
+        self,
+        residuals: np.ndarray,      # (T, P)
+        ft_values: np.ndarray,      # (T, 6)
+        times: np.ndarray,          # (T,)
+        contact_mask: np.ndarray,   # (T,)
+    ) -> None:
+        """Add a batch of timesteps."""
+        residuals = np.asarray(residuals, dtype=self.residuals.dtype)
+        ft_values = np.asarray(ft_values, dtype=self.ft_values.dtype)
+        times = np.asarray(times, dtype=self.times.dtype)
+        contact_mask = np.asarray(contact_mask, dtype=np.uint8)
+
+        P = self.mesh_points.shape[0]
+        T_new = residuals.shape[0]
+
+        if residuals.shape[1] != P:
+            raise ValueError(f"residuals shape {residuals.shape} incompatible with P={P}")
+        if ft_values.shape != (T_new, 6):
+            raise ValueError(f"ft_values shape {ft_values.shape} != expected ({T_new}, 6)")
+        if times.shape != (T_new,):
+            raise ValueError(f"times shape {times.shape} != expected ({T_new},)")
+        if contact_mask.shape != (T_new,):
+            raise ValueError(f"contact_mask shape {contact_mask.shape} != expected ({T_new},)")
+
+        # Compute min residual info for batch
+        min_indices = np.argmin(residuals, axis=1)
+        min_vals = residuals[np.arange(T_new), min_indices]
+
+        self.residuals = np.concatenate([self.residuals, residuals], axis=0)
+        self.ft_values = np.concatenate([self.ft_values, ft_values], axis=0)
+        self.times = np.concatenate([self.times, times])
+        self.contact_mask = np.concatenate([self.contact_mask, contact_mask])
+        self.min_residual_indices = np.concatenate([self.min_residual_indices, min_indices])
+        self.min_residuals = np.concatenate([self.min_residuals, min_vals])
+
+    # ---------- Accessors ----------
+    def get_contact_points(self) -> np.ndarray:
+        """Return (T, 3) array of estimated contact points (min residual points)."""
+        return self.mesh_points[self.min_residual_indices]
+
+    def get_contact_normals(self) -> np.ndarray:
+        """Return (T, 3) array of normals at estimated contact points."""
+        return self.mesh_normals[self.min_residual_indices]
+
+    def get_timestep(self, t: int) -> Dict:
+        """Return dict for timestep t."""
+        return {
+            "residuals": self.residuals[t],                    # (P,)
+            "ft_value": self.ft_values[t],                     # (6,)
+            "time": float(self.times[t]),
+            "contact": bool(self.contact_mask[t]),
+            "min_residual_idx": int(self.min_residual_indices[t]),
+            "min_residual": float(self.min_residuals[t]),
+            "contact_point": self.mesh_points[self.min_residual_indices[t]],  # (3,)
+            "contact_normal": self.mesh_normals[self.min_residual_indices[t]],  # (3,)
+        }
+
+    # ---------- I/O ----------
+    def save(self, path: str) -> None:
+        """Compressed, pickle-free save."""
+        np.savez_compressed(
+            path,
+            mesh_points=self.mesh_points,
+            mesh_normals=self.mesh_normals,
+            residuals=self.residuals,
+            ft_values=self.ft_values,
+            times=self.times,
+            contact_mask=self.contact_mask,
+            min_residual_indices=self.min_residual_indices,
+            min_residuals=self.min_residuals,
+        )
+
+    @classmethod
+    def load(cls, path: str) -> "ContactResidualResult":
+        """Pickle-free load."""
+        data = np.load(path, allow_pickle=False)
+        return cls(
+            mesh_points=data["mesh_points"],
+            mesh_normals=data["mesh_normals"],
+            residuals=data["residuals"],
+            ft_values=data["ft_values"],
+            times=data["times"],
+            contact_mask=data["contact_mask"],
+            min_residual_indices=data["min_residual_indices"],
+            min_residuals=data["min_residuals"],
+        )
+
+    # ---------- Convenience ----------
+    @property
+    def P(self) -> int:
+        """Number of mesh points."""
+        return self.mesh_points.shape[0]
+
+    @property
+    def T(self) -> int:
+        """Number of timesteps."""
+        return self.times.shape[0]
+
+    @property
+    def num_contacts(self) -> int:
+        """Number of timesteps with contact."""
+        return int(self.contact_mask.sum())
+
+    def summary(self) -> str:
+        if self.T == 0:
+            return "ContactResidualResult: [empty]"
+        t_min, t_max = float(self.times.min()), float(self.times.max())
+        res_min, res_max = float(self.min_residuals.min()), float(self.min_residuals.max())
+        res_mean = float(self.min_residuals[self.contact_mask > 0].mean()) if self.num_contacts > 0 else None
+        return (
+            "ContactResidualResult:\n"
+            f"  Mesh points (P): {self.P}\n"
+            f"  Timesteps (T): {self.T}\n"
+            f"  Contact timesteps: {self.num_contacts}\n"
+            f"  Time range: ({t_min:.4f}, {t_max:.4f})\n"
+            f"  Min residual range: ({res_min:.6f}, {res_max:.6f})\n"
+            f"  Mean min residual (contact only): {res_mean}"
+        )
