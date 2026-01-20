@@ -59,7 +59,7 @@ ap.add_argument(
 args = ap.parse_args()
 
 # Colors
-contact_point_color = [255, 0, 0]  # Red for contact point
+contact_point_color = [255, 255, 255]  # Red for contact point
 ground_truth_color = [0, 255, 0]   # Green for ground truth
 force_color = [255, 165, 0]        # Orange for force vector
 
@@ -104,6 +104,7 @@ K = np.array([[f_x, 0.0, c_x],
 cam_times, cam_mats = ds.se3_traj['X_Camera']
 hole_times, hole_mats = ds.se3_traj['X_Hole']
 peg_times, peg_mats = ds.se3_traj['X_Peg']
+ftsense_times, ftsense_mats = ds.se3_traj['X_Ftsense']
 
 # Log static elements
 rr.log(
@@ -168,7 +169,23 @@ for k in frame_range:
     has_contact = res.contact_mask[k] > 0
     min_idx = res.min_residual_indices[k]
 
-    # Color mesh points by residual (only if contact)
+    # Find closest peg pose by time
+    peg_idx = np.searchsorted(peg_times, t, side='right') - 1
+    peg_idx = max(0, min(peg_idx, len(peg_mats) - 1))
+    X_Peg = peg_mats[peg_idx]
+
+    # Find closest X_Ftsense pose by time
+    ftsense_idx = np.searchsorted(ftsense_times, t, side='right') - 1
+    ftsense_idx = max(0, min(ftsense_idx, len(ftsense_mats) - 1))
+    X_Ftsense = ftsense_mats[ftsense_idx]
+    t_ftsense = X_Ftsense[:3, 3]
+
+    # Transform mesh points from local to world frame using X_Peg
+    R_peg = X_Peg[:3, :3]
+    t_peg = X_Peg[:3, 3]
+    mesh_points_world = (R_peg @ res.mesh_points.T).T + t_peg
+
+    # Color mesh points by residual
     if has_contact:
         # Normalize residuals for coloring (log scale for better visualization)
         finite_residuals = residuals[np.isfinite(residuals)]
@@ -177,52 +194,54 @@ for k in frame_range:
             log_residuals = np.log1p(np.clip(residuals, 0, 1e6))
             norm = Normalize(vmin=np.min(log_residuals[np.isfinite(log_residuals)]),
                            vmax=np.max(log_residuals[np.isfinite(log_residuals)]))
-            colors = cm.plasma(norm(log_residuals))[:, :3] * 255  # RGB, 0-255
+            colors = cm.jet_r(norm(log_residuals))[:, :3] * 255  # RGB, 0-255
+        else:
+            # Fallback: lowest color in colormap
+            colors = np.full((len(res.mesh_points), 3), cm.jet(0.0)[:3]) * 255
+    else:
+        # No contact: show all points with lowest color in colormap
+        colors = np.full((len(res.mesh_points), 3), cm.jet_r(1.0)[:3]) * 255
 
-            # Transform mesh points from local to world frame using X_Peg
-            R_peg = X_Peg[:3, :3]
-            t_peg = X_Peg[:3, 3]
-            mesh_points_world = (R_peg @ res.mesh_points.T).T + t_peg
+    # Log residual point cloud (transformed to world frame)
+    rr.log(
+        "/world/residual_cloud",
+        rr.Points3D(
+            positions=mesh_points_world,
+            colors=colors.astype(np.uint8),
+            radii=0.002,
+        ),
+    )
 
-            # Log residual point cloud (transformed to world frame)
-            rr.log(
-                "/world/residual_cloud",
-                rr.Points3D(
-                    positions=mesh_points_world,
-                    colors=colors.astype(np.uint8),
-                    radii=0.005,
-                ),
-            )
-
-            # Log estimated contact point (larger, red) - also transformed
-            contact_point_local = res.mesh_points[min_idx]
-            contact_point_world = R_peg @ contact_point_local + t_peg
-            rr.log(
-                "/world/contact_point",
-                rr.Points3D(
-                    positions=[contact_point_world],
-                    colors=[contact_point_color],
-                    radii=0.005,
-                ),
-            )
-
-            # Log force vector at contact point (in world frame)
-            force = ft_value[:3]
-            force_norm = np.linalg.norm(force)
-            if force_norm > 1e-6:
-                # Scale force for visualization (0.01 m per N)
-                force_scaled = force * 0.01
-                rr.log(
-                    "/world/force_vector",
-                    rr.Arrows3D(
-                        vectors=[force_scaled],
-                        origins=[contact_point_world],
-                        colors=[force_color],
-                    ),
-                )
+    if has_contact:
+        # Log estimated contact point (larger, red) - also transformed
+        contact_point_local = res.mesh_points[min_idx]
+        contact_point_world = R_peg @ contact_point_local + t_peg
+        rr.log(
+            "/world/contact_point",
+            rr.Points3D(
+                positions=[contact_point_world],
+                colors=[contact_point_color],
+                radii=0.005,
+            ),
+        )
 
         # Log min residual as scalar
         rr.log("/world/metrics/min_residual", rr.Scalars(res.min_residuals[k]))
+
+    # Log force vector at X_Ftsense origin (in world frame)
+    force = ft_value[:3]
+    force_norm = np.linalg.norm(force)
+    if force_norm > 1e-6:
+        # Scale force for visualization (0.01 m per N)
+        force_scaled = force * 0.01
+        rr.log(
+            "/world/force_vector",
+            rr.Arrows3D(
+                vectors=[force_scaled],
+                origins=[t_ftsense],
+                colors=[force_color],
+            ),
+        )
 
     # Log F/T values as scalars
     rr.log("/world/ft/force_x", rr.Scalars(ft_value[0]))
@@ -233,14 +252,10 @@ for k in frame_range:
     rr.log("/world/ft/torque_z", rr.Scalars(ft_value[5]))
     rr.log("/world/ft/force_magnitude", rr.Scalars(np.linalg.norm(ft_value[:3])))
 
-    # Find closest camera/peg frame to current time
+    # Find closest camera frame to current time
     cam_idx = np.searchsorted(cam_times, t, side='right') - 1
     cam_idx = max(0, min(cam_idx, len(cam_mats) - 1))
-    peg_idx = np.searchsorted(peg_times, t, side='right') - 1
-    peg_idx = max(0, min(peg_idx, len(peg_mats) - 1))
-
     X_Cam = cam_mats[cam_idx]
-    X_Peg = peg_mats[peg_idx]
 
     # Log camera pose and images
     rr.log(
