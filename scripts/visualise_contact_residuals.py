@@ -60,7 +60,7 @@ args = ap.parse_args()
 
 # Colors
 contact_point_color = [255, 255, 255]  # Red for contact point
-ground_truth_color = [0, 255, 0]   # Green for ground truth
+ground_truth_color = [0, 0, 0]   # Green for ground truth
 force_color = [255, 165, 0]        # Orange for force vector
 
 rr.init("contact_residuals", spawn=True)
@@ -105,6 +105,7 @@ cam_times, cam_mats = ds.se3_traj['X_Camera']
 hole_times, hole_mats = ds.se3_traj['X_Hole']
 peg_times, peg_mats = ds.se3_traj['X_Peg']
 ftsense_times, ftsense_mats = ds.se3_traj['X_Ftsense']
+con_times, con_mats = ds.se3_traj['X_Con']
 
 # Log static elements
 rr.log(
@@ -227,6 +228,19 @@ for k in frame_range:
 
         # Log min residual as scalar
         rr.log("/world/metrics/min_residual", rr.Scalars(res.min_residuals[k]))
+
+        # Log ground truth contact location from X_Con
+        con_idx = np.searchsorted(con_times, t, side='right') - 1
+        con_idx = max(0, min(con_idx, len(con_mats) - 1))
+        gt_contact_pos = con_mats[con_idx][:3, 3]
+        rr.log(
+            "/world/gt_contact_point",
+            rr.Points3D(
+                positions=[gt_contact_pos],
+                colors=[ground_truth_color],
+                radii=0.005,
+            ),
+        )
 
     # Log force vector at X_Ftsense origin (in world frame)
     force = ft_value[:3]

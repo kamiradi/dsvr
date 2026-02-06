@@ -143,12 +143,14 @@ for k in frame_range:
     #         origins=[[0,0,0],[0,0,0],[0,0,0]]),
     #     rr.Transform3D(translation=[0,0,0]))
 
-    # log particles poses and generated images
-    for i, image in enumerate(res.images[ts_ind]):
-        rr.log(f"/world/sampled_image/sample_image_{i}", rr.DepthImage(image,
+    # log particle images for the 2 best particles only
+    weights = res.unnormalised_log_pdfs[ts_ind]
+    top2 = np.argsort(weights)[-2:]
+    for i in top2:
+        rr.log(f"/world/sampled_image/sample_image_{i}", rr.DepthImage(res.images[ts_ind][i],
                                                                       meter=1.0, colormap="turbo"))
-    for i, pixel_image in enumerate(res.pixelwise_score[ts_ind]):
-        rr.log(f"/world/pixelwise/pixelwise_score_{i}", rr.DepthImage(pixel_image,
+    for i in top2:
+        rr.log(f"/world/pixelwise/pixelwise_score_{i}", rr.DepthImage(res.pixelwise_score[ts_ind][i],
                                                            meter=1.0,
                                                            colormap="viridis"))
     # iterating through particles
@@ -181,6 +183,18 @@ for k in frame_range:
             centers=[[0.0, 0.0, 0.0]],
             half_sizes=[half_size],
             colors=[particle_color],   # optional tint
+        ))
+        # Orientation line: local X-axis projected onto XY plane
+        x_axis_world = rotation[:, 0]
+        xy_dir = np.array([x_axis_world[0], x_axis_world[1], 0.0])
+        xy_norm = np.linalg.norm(xy_dir)
+        if xy_norm > 1e-6:
+            xy_dir /= xy_norm
+        arrow_len = 0.04
+        rr.log(f"/world/orientations/particle_{i}", rr.Arrows3D(
+            origins=[translation],
+            vectors=[xy_dir * arrow_len],
+            colors=[[255, 255, 255]],
         ))
         rr.log(f"{gt}/geom", rr.Boxes3D(
             centers=[[0.0, 0.0, 0.0]],
