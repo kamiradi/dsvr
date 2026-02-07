@@ -52,6 +52,11 @@ ap.add_argument(
     default=os.path.expanduser("~/Documents/workspace/assembly_description/urdf/meshes/rectangular_peg.obj"),
     help="Path to peg mesh OBJ file",
 )
+ap.add_argument(
+    "--seg-mask",
+    action="store_true",
+    help="Visualise segmentation masks (requires RoboticsDatasetV3 with seg_mask data)",
+)
 args = ap.parse_args()
 
 # some useful colors
@@ -62,7 +67,12 @@ estimate_color = [0, 0, 200, 100]
 rr.init("results", spawn=True)
 # Load dataset
 res = VisionInferenceResultV3.load(args.result_npz)
-ds = RoboticsDatasetV2.load(args.data_npz)
+if args.seg_mask:
+    from dsvr.datasets.robot_data import RoboticsDatasetV3
+    ds = RoboticsDatasetV3.load(args.data_npz)
+    assert ds.seg_mask is not None, "Dataset has no seg_mask data"
+else:
+    ds = RoboticsDatasetV2.load(args.data_npz)
 rr.log("world", rr.ViewCoordinates.RIGHT_HAND_Z_UP, static=True)
 
 # Load and setup URDF robot visualization
@@ -224,6 +234,16 @@ for k in frame_range:
     )
     rr.log(f"{cam_ent}/rgb", rr.Image(ds.images[ts_ind]))
     rr.log(f"{cam_ent}/depth", rr.DepthImage(ds.depth[ts_ind], meter=1.0))
+
+    # Log segmentation mask
+    if args.seg_mask and ds.seg_mask is not None:
+        seg_idx = 0
+        for si in range(len(ds.seg_mask_ts)):
+            if ds.seg_mask_ts[si] >= d:
+                seg_idx = si
+                break
+        rr.log(f"{cam_ent}/seg_mask", rr.SegmentationImage(ds.seg_mask[seg_idx]))
+
     # rr.log(f"{cam_ent}/rgb", rr.Transform3D(translation=[0, 0, 0]), static=True)
     # rr.log(f"{cam_ent}/depth", rr.Transform3D(translation=[0, 0, 0]), static=True)
 
