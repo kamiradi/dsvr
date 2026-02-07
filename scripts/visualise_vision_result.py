@@ -53,6 +53,12 @@ ap.add_argument(
     help="Path to peg mesh OBJ file",
 )
 ap.add_argument(
+    "--hole-mesh",
+    type=str,
+    default=os.path.expanduser("~/Documents/workspace/assembly_description/urdf/meshes/rectangular_hole.obj"),
+    help="Path to hole mesh OBJ file",
+)
+ap.add_argument(
     "--seg-mask",
     action="store_true",
     help="Visualise segmentation masks (requires RoboticsDatasetV3 with seg_mask data)",
@@ -61,7 +67,7 @@ args = ap.parse_args()
 
 # some useful colors
 particle_color = [10, 10, 10]
-ground_truth_color = [0, 255, 0]
+ground_truth_color = [0, 255, 255]  # Cyan
 estimate_color = [0, 0, 200, 100]
 
 rr.init("results", spawn=True)
@@ -103,7 +109,7 @@ hole_times, hole_mats = ds.se3_traj['X_Hole']
 peg_times, peg_mats = ds.se3_traj['X_Peg']
 T = mats.shape[0]
 count=0
-half_size = np.array([0.04, 0.04, 0.025])
+hole_ent = "/world/ground_truth"
 
 # Log static identity transforms for parent entities to establish transform hierarchy
 # rr.log("world/origin", rr.Transform3D(translation=[0, 0, 0]), static=True)
@@ -184,15 +190,13 @@ for k in frame_range:
             ),
         )
         weights = res.unnormalised_log_pdfs[ts_ind]
-        # print weight stats like min, max mean
         norm = Normalize(vmin=min(weights), vmax=max(weights))
         normalized_weight = norm(weights[i])
-        particle_color = cm.viridis(normalized_weight)
+        alpha = int(normalized_weight * 200 + 55)  # range 55-255
 
-        rr.log(f"{ent}/geom", rr.Boxes3D(
-            centers=[[0.0, 0.0, 0.0]],
-            half_sizes=[half_size],
-            colors=[particle_color],   # optional tint
+        rr.log(f"{ent}/geom", rr.Asset3D(
+            path=args.hole_mesh,
+            albedo_factor=[255, 165, 0, alpha],  # Orange with weight-based alpha
         ))
         # Orientation line: local X-axis projected onto XY plane
         x_axis_world = rotation[:, 0]
@@ -206,10 +210,9 @@ for k in frame_range:
             vectors=[xy_dir * arrow_len],
             colors=[[255, 255, 255]],
         ))
-        rr.log(f"{gt}/geom", rr.Boxes3D(
-            centers=[[0.0, 0.0, 0.0]],
-            half_sizes=[half_size],
-            colors=[ground_truth_color],   # optional tint
+        rr.log(f"{gt}/geom", rr.Asset3D(
+            path=args.hole_mesh,
+            albedo_factor=[0, 255, 255, 255],  # Cyan, fully opaque
         ))
 
     for i, score in enumerate(res.unnormalised_log_pdfs[ts_ind]):
