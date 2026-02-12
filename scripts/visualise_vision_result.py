@@ -208,7 +208,7 @@ for k in frame_range:
         rr.log(f"/world/orientations/particle_{i}", rr.Arrows3D(
             origins=[translation],
             vectors=[xy_dir * arrow_len],
-            colors=[[255, 255, 255]],
+            colors=[[0, 0, 0]],
         ))
         rr.log(f"{gt}/geom", rr.Asset3D(
             path=args.hole_mesh,
