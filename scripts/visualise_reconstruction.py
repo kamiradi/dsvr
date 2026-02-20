@@ -22,6 +22,14 @@ ap.add_argument(
     default=os.path.expanduser("~/Documents/workspace/assembly_description/urdf/meshes/rectangular_peg.obj"),
     help="Path to peg mesh OBJ file",
 )
+ap.add_argument(
+    "--hole-mesh",
+    type=str,
+    default=os.path.expanduser("~/Documents/workspace/assembly_description/urdf/meshes/rectangular_hole.obj"),
+    help="Path to hole mesh OBJ file",
+)
+ap.add_argument("--prior-mesh", type=str, default=None, help="Path to prior shape .ply")
+ap.add_argument("--hole-interior", type=str, default=None, help="Path to hole interior .ply (from isolate_hole.py)")
 ap.add_argument("--start", type=int, default=0)
 ap.add_argument("--end", type=int, default=-1)
 ap.add_argument("--step", type=int, default=4)
@@ -77,6 +85,24 @@ rr.log("/world/reconstruction",
            vertex_colors=_mesh.visual.vertex_colors[:, :3],
        ), static=True)
 
+if args.prior_mesh is not None:
+    _prior = trimesh.load(args.prior_mesh)
+    rr.log("/world/prior_shape",
+           rr.Mesh3D(
+               vertex_positions=_prior.vertices,
+               triangle_indices=_prior.faces,
+               vertex_colors=np.full((len(_prior.vertices), 3), 180, dtype=np.uint8),
+           ), static=True)
+
+if args.hole_interior is not None:
+    _interior = trimesh.load(args.hole_interior, force="mesh")
+    rr.log("/world/hole_interior",
+           rr.Mesh3D(
+               vertex_positions=_interior.vertices,
+               triangle_indices=_interior.faces,
+               vertex_colors=np.full((len(_interior.vertices), 3), [255, 165, 0], dtype=np.uint8),
+           ), static=True)
+
 rr.log(
     "/world/ground_truth",
     rr.Transform3D(
@@ -85,6 +111,10 @@ rr.log(
     ),
     static=True,
 )
+rr.log("/world/ground_truth/geom", rr.Asset3D(
+    path=args.hole_mesh,
+    albedo_factor=[0, 255, 255, 255],  # Cyan, fully opaque
+), static=True)
 
 # Log peg mesh as static asset
 peg_ent = "/world/peg"
