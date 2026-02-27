@@ -42,6 +42,8 @@ data_npz           = args.data_path
 mesh_path          = os.path.join(results_dir, "reconstruction_measurement_10.ply")
 if not os.path.exists(mesh_path):
     mesh_path      = os.path.join(results_dir, "reconstruction_measurement_9.ply")
+if not os.path.exists(mesh_path):
+    mesh_path      = os.path.join(results_dir, "reconstruction.ply")
 envelope_mesh_path = _maybe(results_dir, "reconstruction_with_envelope.ply")
 occ_pc_path        = _maybe(results_dir, "occupancy_pointcloud.ply")
 scalar_fields_path = _maybe(results_dir, "scalar_fields.npz")
