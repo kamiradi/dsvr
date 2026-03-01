@@ -214,6 +214,24 @@ def main():
                         rr.log(f"{args.root_path}/{joint.child_link}",
                                joint.compute_transform(q[idx]))
 
+    # Log F/T time series
+    if ds.ft is not None and ds.ft_ts is not None:
+        ft_channels = [
+            ("ft/force/x", "Fx [N]",  [220,  50,  50]),
+            ("ft/force/y", "Fy [N]",  [ 50, 200,  50]),
+            ("ft/force/z", "Fz [N]",  [ 50, 100, 220]),
+            ("ft/torque/x","Tx [Nm]", [220, 150,  50]),
+            ("ft/torque/y","Ty [Nm]", [180,  50, 220]),
+            ("ft/torque/z","Tz [Nm]", [ 50, 200, 200]),
+        ]
+        for path, label, color in ft_channels:
+            rr.log(path, rr.SeriesLines(colors=[color], names=[label]), static=True)
+        print("Logging F/T data...")
+        for i in range(len(ds.ft_ts)):
+            rr.set_time("time", duration=float(ds.ft_ts[i]))
+            for j, (path, _, _) in enumerate(ft_channels):
+                rr.log(path, rr.Scalars(float(ds.ft[i, j])))
+
     # Coordinate frame setup (matching visualise_reconstruction.py)
     rr.log("/", rr.CoordinateFrame("root"), static=True)
     rr.log("/", rr.Transform3D(translation=[0., 0., 0.],
