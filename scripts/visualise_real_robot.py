@@ -106,15 +106,21 @@ def main():
         static=True,
     )
 
-    # Camera setup
+    # Camera setup — use depth intrinsics from dataset metadata
+    import json as _json
     cam_ent = "/world/camera"
-    width, height = 640, 480
-    fov_y = np.pi / 4
-    f_x = f_y = 0.5 * height / np.tan(0.5 * fov_y)
-    c_x, c_y = width / 2.0, height / 2.0
-    K = np.array([[f_x, 0.0, c_x],
-                  [0.0, f_y, c_y],
-                  [0.0, 0.0, 1.0]], dtype=float)
+    meta = _json.loads(str(ds.metadata_json)) if ds.metadata_json is not None else {}
+    depth_cam = meta.get("depth_camera", {})
+    width  = depth_cam.get("width",  848)
+    height = depth_cam.get("height", 480)
+    K_flat = depth_cam.get("K", None)
+    if K_flat is not None:
+        K = np.array(K_flat, dtype=float).reshape(3, 3)
+    else:
+        fov_y = np.pi / 4
+        f = 0.5 * height / np.tan(0.5 * fov_y)
+        K = np.array([[f, 0., width / 2.], [0., f, height / 2.], [0., 0., 1.]], dtype=float)
+    print(f"Depth camera: {width}x{height}\nK=\n{K}")
 
     # Log hole mesh at last known X_Hole pose (static ground truth)
     if (hasattr(ds, 'se3_traj') and ds.se3_traj is not None
@@ -166,8 +172,10 @@ def main():
                                         camera_xyz=rr.ViewCoordinates.RDF))
             if ds.images is not None:
                 rr.log(f"{cam_ent}/rgb", rr.Image(ds.images[ts_ind]))
-            if ds.depth is not None:
-                rr.log(f"{cam_ent}/depth", rr.DepthImage(ds.depth[ts_ind], meter=1.0))
+            if ds.depth is not None and ds.depth_ts is not None:
+                depth_ind = int(np.searchsorted(ds.depth_ts, d, side="right")) - 1
+                depth_ind = max(0, min(depth_ind, len(ds.depth_ts) - 1))
+                rr.log(f"{cam_ent}/depth", rr.DepthImage(ds.depth[depth_ind], meter=1.0))
 
             # Robot joint states (look up closest joint timestamp)
             joint_idx = 0
