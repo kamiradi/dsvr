@@ -28,6 +28,7 @@ ap.add_argument(
     default=os.path.expanduser("~/Documents/workspace/assembly_description/urdf/meshes/rectangular_hole.obj"),
     help="Path to hole mesh OBJ file",
 )
+ap.add_argument("--measurement", type=int, default=10, help="Measurement index to load (e.g. 10 loads reconstruction_measurement_10.ply)")
 ap.add_argument("--start", type=int, default=0)
 ap.add_argument("--end", type=int, default=-1)
 ap.add_argument("--step", type=int, default=4)
@@ -39,14 +40,13 @@ def _maybe(d, f):
 
 results_dir        = args.result_path
 data_npz           = args.data_path
-mesh_path          = os.path.join(results_dir, "reconstruction_measurement_10.ply")
-if not os.path.exists(mesh_path):
-    mesh_path      = os.path.join(results_dir, "reconstruction_measurement_9.ply")
+mesh_path          = os.path.join(results_dir, f"reconstruction_measurement_{args.measurement}.ply")
 if not os.path.exists(mesh_path):
     mesh_path      = os.path.join(results_dir, "reconstruction.ply")
 envelope_mesh_path = _maybe(results_dir, "reconstruction_with_envelope.ply")
 occ_pc_path        = _maybe(results_dir, "occupancy_pointcloud.ply")
 scalar_fields_path = _maybe(results_dir, "scalar_fields.npz")
+accumulated_pcd_path = _maybe(results_dir, "accumulated_pcd.npy")
 
 rr.init("reconstruction", spawn=True)
 rr.log("world", rr.ViewCoordinates.RIGHT_HAND_Z_UP, static=True)
@@ -60,15 +60,28 @@ urdf_tree = UrdfTree.from_file_path(args.urdf)
 joint_names = [j.name for j in urdf_tree.joints() if j.joint_type in ("revolute", "continuous", "prismatic")]
 joint_name_to_idx: Dict[str, int] = {name: i for i, name in enumerate(joint_names)}
 
-# Camera intrinsics
+# Camera intrinsics — load from dataset metadata if available
+import json as _json
 cam_ent = "/world/camera"
-width, height = 640, 480
-fov_y = np.pi / 4
-f_x = f_y = 0.5 * height / np.tan(0.5 * fov_y)
-c_x, c_y = width / 2.0, height / 2.0
-K = np.array([[f_x, 0.0, c_x],
-              [0.0, f_y, c_y],
-              [0.0, 0.0, 1.0]], dtype=float)
+try:
+    meta = _json.loads(str(ds.metadata_json))
+except (TypeError, ValueError):
+    meta = {}
+depth_cam = meta.get("depth_camera", {})
+width  = depth_cam.get("width",  640)
+height = depth_cam.get("height", 480)
+K_flat = depth_cam.get("K", None)
+if K_flat is not None:
+    K = np.array(K_flat, dtype=float).reshape(3, 3)
+else:
+    fov_y = np.pi / 4
+    f_x = f_y = 0.5 * height / np.tan(0.5 * fov_y)
+    c_x, c_y = width / 2.0, height / 2.0
+    K = np.array([[f_x, 0.0, c_x],
+                  [0.0, f_y, c_y],
+                  [0.0, 0.0, 1.0]], dtype=float)
+f_x, f_y = K[0, 0], K[1, 1]
+c_x, c_y = K[0, 2], K[1, 2]
 
 # Trajectories
 times, mats = ds.se3_traj['X_Camera']
@@ -114,6 +127,13 @@ if occ_pc_path is not None:
     occ_colors = np.array(_occ.colors[:, :3], dtype=np.uint8) if hasattr(_occ, 'colors') and _occ.colors is not None else None
     rr.log("/world/occupancy_pointcloud",
            rr.Points3D(np.array(_occ.vertices), colors=occ_colors, radii=0.004),
+           static=True)
+
+# Accumulated point cloud used for reconstruction
+if accumulated_pcd_path is not None:
+    _acc = np.load(accumulated_pcd_path)
+    rr.log("/world/accumulated_pointcloud",
+           rr.Points3D(_acc[:, :3], radii=0.002),
            static=True)
 
 if scalar_fields_path is not None:
@@ -195,6 +215,11 @@ rr.log("/world/ground_truth/geom", rr.Asset3D(
 peg_ent = "/world/peg"
 rr.log(peg_ent, rr.Asset3D(path=args.peg_mesh), static=True)
 
+# Static pinhole (intrinsics don't change)
+rr.log(cam_ent, rr.Pinhole(resolution=[width, height], image_from_camera=K,
+                            camera_xyz=rr.ViewCoordinates.RDF,
+                            image_plane_distance=0.05), static=True)
+
 # Frame loop
 end = args.end if args.end > 0 else T
 frame_range = range(args.start, end, args.step)
@@ -214,15 +239,18 @@ for k in frame_range:
             ts_ind = ts
             break
 
-    # Camera transform + pinhole
+    # Camera transform
     rr.log(cam_ent, rr.Transform3D(mat3x3=X_Cam[:3, :3], translation=X_Cam[:3, 3]))
-    rr.log(cam_ent, rr.Pinhole(resolution=[width, height], image_from_camera=K,
-                                camera_xyz=rr.ViewCoordinates.RDF))
     rr.log(f"{cam_ent}/rgb", rr.Image(ds.images[ts_ind]))
-    rr.log(f"{cam_ent}/depth", rr.DepthImage(ds.depth[ts_ind], meter=1.0))
+    if ds.depth is not None and ds.depth_ts is not None:
+        depth_ind = int(np.searchsorted(ds.depth_ts, d, side="right")) - 1
+        depth_ind = max(0, min(depth_ind, len(ds.depth_ts) - 1))
+    else:
+        depth_ind = ts_ind
+    rr.log(f"{cam_ent}/depth", rr.DepthImage(ds.depth[depth_ind], meter=1.0))
 
     # Point cloud from depth in world frame
-    pts_world = depth_to_pointcloud(ds.depth[ts_ind], f_x, f_y, c_x, c_y, T_wc=X_Cam)
+    pts_world = depth_to_pointcloud(ds.depth[depth_ind], f_x, f_y, c_x, c_y, T_wc=X_Cam)
     if pts_world.shape[0] > 0:
         rr.log("/world/pointcloud", rr.Points3D(pts_world, colors=[200, 200, 255]))
 
