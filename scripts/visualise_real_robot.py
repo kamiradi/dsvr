@@ -12,11 +12,13 @@ import argparse
 import os
 from typing import Optional, Dict
 
+import matplotlib.cm as mcm
 import numpy as np
 import rerun as rr
 from rerun.urdf import UrdfTree
 
 from dsvr.datasets.robot_data import RoboticsDatasetV2, RoboticsDatasetV3
+from dsvr.results.robot_results import ContactResidualResult
 
 
 def main():
@@ -63,6 +65,12 @@ def main():
         default=os.path.expanduser("~/Documents/workspace/assembly_description/urdf/meshes/rectangular_hole.obj"),
         help="Path to hole mesh OBJ file",
     )
+    parser.add_argument(
+        "--contact-residuals",
+        type=str,
+        default=None,
+        help="Path to ContactResidualResult .npz file (optional)",
+    )
     args = parser.parse_args()
 
     # Initialize Rerun
@@ -76,6 +84,12 @@ def main():
         ds = RoboticsDatasetV2.load(args.data_npz)
 
     print(f"Dataset summary: {ds.summary()}")
+
+    # Load contact residuals if provided
+    cr = None
+    if args.contact_residuals is not None:
+        cr = ContactResidualResult.load(args.contact_residuals)
+        print(f"Contact residuals: {cr.summary()}")
 
     if ds.joint_states is None or ds.joint_ts is None:
         print("Error: Dataset does not contain joint states.")
@@ -190,6 +204,27 @@ def main():
                     if idx < len(q):
                         rr.log(f"{args.root_path}/{joint.child_link}",
                                joint.compute_transform(q[idx]))
+
+            # Contact residuals: colored point cloud in world frame
+            if cr is not None and 'X_Peg' in ds.se3_traj:
+                peg_times, peg_mats = ds.se3_traj['X_Peg']
+                cr_idx = int(np.clip(
+                    np.searchsorted(cr.times, d, side="right") - 1,
+                    0, cr.T - 1,
+                ))
+                peg_idx = int(np.clip(
+                    np.searchsorted(peg_times, d, side="right") - 1,
+                    0, len(peg_times) - 1,
+                ))
+                R_peg = peg_mats[peg_idx, :3, :3]
+                t_peg = peg_mats[peg_idx, :3, 3]
+                pts_W = (R_peg @ cr.mesh_points.T).T + t_peg
+                residuals = cr.residuals[cr_idx]          # (P,)
+                likelihood = np.exp(-residuals)
+                lo, hi = likelihood.min(), likelihood.max()
+                norm = (likelihood - lo) / max(hi - lo, 1e-6)
+                colors = (mcm.turbo(norm)[:, :3] * 255).astype(np.uint8)
+                rr.log("/world/contact_residuals", rr.Points3D(pts_W, colors=colors, radii=0.001))
 
             count += 1
             print(f"\rProcessing frame {count}/{total_frames}...", end="", flush=True)
