@@ -1,7 +1,9 @@
 import rerun as rr
 import os
 import numpy as np
+import matplotlib.cm as mcm
 from dsvr.datasets.robot_data import RoboticsDatasetV3
+from dsvr.results.robot_results import ContactResidualResult
 import argparse
 from typing import Dict
 from rerun.urdf import UrdfTree
@@ -29,6 +31,7 @@ ap.add_argument(
     help="Path to hole mesh OBJ file",
 )
 ap.add_argument("--measurement", type=int, default=10, help="Measurement index to load (e.g. 10 loads reconstruction_measurement_10.ply)")
+ap.add_argument("--contact-residuals", type=str, default=None, help="Path to ContactResidualResult .npz file (optional)")
 ap.add_argument("--start", type=int, default=0)
 ap.add_argument("--end", type=int, default=-1)
 ap.add_argument("--step", type=int, default=4)
@@ -53,6 +56,17 @@ rr.log("world", rr.ViewCoordinates.RIGHT_HAND_Z_UP, static=True)
 
 # Load dataset
 ds = RoboticsDatasetV3.load(data_npz)
+
+# Load contact residuals if provided
+cr = None
+if args.contact_residuals is not None:
+    cr = ContactResidualResult.load(args.contact_residuals)
+    print(f"Contact residuals: {cr.summary()}")
+
+# Ensure ROS packages are resolvable for the URDF loader
+ros_pkg_path = "/home/aditya/Documents/workspace/iiwa_assembly/src/mp"
+existing = os.environ.get("ROS_PACKAGE_PATH", "")
+os.environ["ROS_PACKAGE_PATH"] = f"{ros_pkg_path}:{existing}" if existing else ros_pkg_path
 
 # Load and setup URDF robot
 rr.log_file_from_path(args.urdf, entity_path_prefix=args.root_path, static=True)
@@ -211,9 +225,22 @@ rr.log("/world/ground_truth/geom", rr.Asset3D(
     albedo_factor=[0, 255, 255, 255],  # Cyan, fully opaque
 ), static=True)
 
-# Log peg mesh as static asset
+# Peg mesh — load vertices/faces for surface coloring
 peg_ent = "/world/peg"
-rr.log(peg_ent, rr.Asset3D(path=args.peg_mesh), static=True)
+_peg_mesh = trimesh.load(args.peg_mesh, force="mesh")
+peg_verts_local = np.array(_peg_mesh.vertices, dtype=float)   # (V, 3) trimesh frame
+peg_faces = np.array(_peg_mesh.faces, dtype=np.int32)          # (F, 3)
+# trimesh frame → peg_link_base frame (matches cr.mesh_points frame)
+_R_TRIMESH_ROS = np.array([[0., 0., -1.], [1., 0., 0.], [0., -1., 0.]])
+_T_TRIMESH_ROS = np.array([0., 0., 0.0275])
+peg_verts_peg = (_R_TRIMESH_ROS @ peg_verts_local.T).T + _T_TRIMESH_ROS  # (V, 3)
+
+if cr is not None:
+    from scipy.spatial import KDTree
+    _kd = KDTree(cr.mesh_points)
+    _, _nn_idx = _kd.query(peg_verts_peg)   # (V,) nearest sample per vertex, both in peg frame
+else:
+    rr.log(peg_ent, rr.Asset3D(path=args.peg_mesh), static=True)
 
 # Static pinhole (intrinsics don't change)
 rr.log(cam_ent, rr.Pinhole(resolution=[width, height], image_from_camera=K,
@@ -254,8 +281,9 @@ for k in frame_range:
     if pts_world.shape[0] > 0:
         rr.log("/world/pointcloud", rr.Points3D(pts_world, colors=[200, 200, 255]))
 
-    # Peg pose
-    rr.log(peg_ent, rr.Transform3D(mat3x3=peg_mats[k][:3, :3], translation=peg_mats[k][:3, 3]))
+    # Peg pose (only when not rendering surface colours; otherwise handled below)
+    if cr is None:
+        rr.log(peg_ent, rr.Transform3D(mat3x3=peg_mats[k][:3, :3], translation=peg_mats[k][:3, 3]))
 
     # Robot joint states
     if ds.joint_states is not None and ds.joint_ts is not None:
@@ -271,6 +299,34 @@ for k in frame_range:
                 if idx < len(q):
                     rr.log(f"{args.root_path}/{joint.child_link}",
                            joint.compute_transform(q[idx]))
+
+    # Contact residuals: colored point cloud in world frame
+    if cr is not None:
+        cr_idx = int(np.clip(
+            np.searchsorted(cr.times, d, side="right") - 1,
+            0, cr.T - 1,
+        ))
+        peg_idx = int(np.clip(
+            np.searchsorted(peg_times, d, side="right") - 1,
+            0, len(peg_times) - 1,
+        ))
+        R_peg = peg_mats[peg_idx, :3, :3]
+        t_peg = peg_mats[peg_idx, :3, 3]
+        pts_W = (R_peg @ cr.mesh_points.T).T + t_peg
+        likelihood = cr.residuals[cr_idx]          # (P,) already likelihoods
+        lo, hi = likelihood.min(), likelihood.max()
+        norm = (likelihood - lo) / max(hi - lo, 1e-6)
+        colors = (mcm.turbo(norm)[:, :3] * 255).astype(np.uint8)
+        rr.log("/world/contact_residuals", rr.Points3D(pts_W, colors=colors, radii=0.001))
+        # Render residuals as vertex colours on the peg mesh surface
+        verts_world = (R_peg @ peg_verts_peg.T).T + t_peg
+        rr.log(peg_ent, rr.Mesh3D(
+            vertex_positions=verts_world,
+            triangle_indices=peg_faces,
+            vertex_colors=colors[_nn_idx],
+        ))
+        hist_counts, _ = np.histogram(likelihood, bins=50)
+        rr.log("/world/contact_residuals/distribution", rr.BarChart(hist_counts.astype(np.float32)))
 
     count += 1
     print(f"\rProcessing frame {count}/{total_frames}...", end="", flush=True)

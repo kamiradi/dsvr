@@ -95,6 +95,11 @@ def main():
         print("Error: Dataset does not contain joint states.")
         return
 
+    # Ensure ROS packages (e.g. iiwa_peg) are resolvable for the URDF loader
+    ros_pkg_path = "/home/aditya/Documents/workspace/iiwa_assembly/src/mp"
+    existing = os.environ.get("ROS_PACKAGE_PATH", "")
+    os.environ["ROS_PACKAGE_PATH"] = f"{ros_pkg_path}:{existing}" if existing else ros_pkg_path
+
     # Log the URDF file as a static resource
     rr.log_file_from_path(args.urdf, entity_path_prefix=args.root_path, static=True)
 
@@ -156,6 +161,9 @@ def main():
     has_camera = (hasattr(ds, 'se3_traj') and ds.se3_traj is not None
                   and 'X_Camera' in ds.se3_traj)
 
+    t_start: Optional[float] = None
+    t_end: Optional[float] = None
+
     if has_camera:
         # Camera-primary loop: iterate over camera trajectory, look up closest joint state
         # (matches visualise_reconstruction.py structure)
@@ -163,6 +171,8 @@ def main():
         num_frames = cam_mats.shape[0]
         start_idx = max(0, args.start)
         end_idx = min(num_frames, args.end) if args.end is not None else num_frames
+        t_start = float(cam_times[start_idx])
+        t_end = float(cam_times[end_idx - 1])
         print(f"Logging frames {start_idx} to {end_idx} (of {num_frames} total)...")
 
         count = 0
@@ -219,12 +229,15 @@ def main():
                 R_peg = peg_mats[peg_idx, :3, :3]
                 t_peg = peg_mats[peg_idx, :3, 3]
                 pts_W = (R_peg @ cr.mesh_points.T).T + t_peg
-                residuals = cr.residuals[cr_idx]          # (P,)
-                likelihood = np.exp(-residuals)
-                lo, hi = likelihood.min(), likelihood.max()
-                norm = (likelihood - lo) / max(hi - lo, 1e-6)
+                likelihoods = cr.residuals[cr_idx]          # (P,)
+                lo, hi = likelihoods.min(), likelihoods.max()
+                norm = (likelihoods - lo) / max(hi - lo, 1e-6)
                 colors = (mcm.turbo(norm)[:, :3] * 255).astype(np.uint8)
                 rr.log("/world/contact_residuals", rr.Points3D(pts_W, colors=colors, radii=0.001))
+
+                # 2-D likelihood distribution (histogram)
+                hist_counts, _ = np.histogram(likelihoods, bins=50)
+                rr.log("/world/contact_residuals/distribution", rr.BarChart(hist_counts.astype(np.float32)))
 
             count += 1
             print(f"\rProcessing frame {count}/{total_frames}...", end="", flush=True)
@@ -234,6 +247,8 @@ def main():
         num_configs = ds.joint_states.shape[0]
         start_idx = max(0, args.start)
         end_idx = min(num_configs, args.end) if args.end is not None else num_configs
+        t_start = float(ds.joint_ts[start_idx])
+        t_end = float(ds.joint_ts[end_idx - 1])
         print(f"Logging frames {start_idx} to {end_idx} (of {num_configs} total)...")
 
         for i in range(start_idx, end_idx):
@@ -261,8 +276,13 @@ def main():
         ]
         for path, label, color in ft_channels:
             rr.log(path, rr.SeriesLines(colors=[color], names=[label]), static=True)
+        if t_start is not None and t_end is not None:
+            ft_start = int(np.searchsorted(ds.ft_ts, t_start, side="left"))
+            ft_end = int(np.searchsorted(ds.ft_ts, t_end, side="right"))
+        else:
+            ft_start, ft_end = 0, len(ds.ft_ts)
         print("Logging F/T data...")
-        for i in range(len(ds.ft_ts)):
+        for i in range(ft_start, ft_end):
             rr.set_time("time", duration=float(ds.ft_ts[i]))
             for j, (path, _, _) in enumerate(ft_channels):
                 rr.log(path, rr.Scalars(float(ds.ft[i, j])))
