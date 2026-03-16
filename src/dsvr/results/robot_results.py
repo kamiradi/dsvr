@@ -805,7 +805,7 @@ class ContactResidualResult:
             mesh_normals=np.empty((P, 3), dtype=float_dtype),
             residuals=np.empty((0, P), dtype=float_dtype),
             ft_values=np.empty((0, 6), dtype=float_dtype),
-            times=np.empty((0,), dtype=float_dtype),
+            times=np.empty((0,), dtype=np.float64),
             contact_mask=np.empty((0,), dtype=np.uint8),
             min_residual_indices=np.empty((0,), dtype=np.int64),
             min_residuals=np.empty((0,), dtype=float_dtype),
@@ -838,7 +838,7 @@ class ContactResidualResult:
             mesh_normals=mesh_normals,
             residuals=np.empty((0, P), dtype=float_dtype),
             ft_values=np.empty((0, 6), dtype=float_dtype),
-            times=np.empty((0,), dtype=float_dtype),
+            times=np.empty((0,), dtype=np.float64),
             contact_mask=np.empty((0,), dtype=np.uint8),
             min_residual_indices=np.empty((0,), dtype=np.int64),
             min_residuals=np.empty((0,), dtype=float_dtype),
@@ -913,7 +913,7 @@ class ContactResidualResult:
         """Add a batch of timesteps."""
         residuals = np.asarray(residuals, dtype=self.residuals.dtype)
         ft_values = np.asarray(ft_values, dtype=self.ft_values.dtype)
-        times = np.asarray(times, dtype=self.times.dtype)
+        times = np.asarray(times, dtype=np.float64)
         contact_mask = np.asarray(contact_mask, dtype=np.uint8)
 
         P = self.mesh_points.shape[0]
