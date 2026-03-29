@@ -1111,6 +1111,8 @@ class ContactLocationInferenceResult:
     unnormalised_log_pdfs: np.ndarray
     measurement_ids: np.ndarray
     probe_poses: np.ndarray
+    joint_position_obs: np.ndarray  # (K, T, 7)
+    joint_position_sim: np.ndarray  # (K, N, T, 7)
 
     # ---------- Constructors ----------
     @classmethod
@@ -1137,6 +1139,8 @@ class ContactLocationInferenceResult:
             unnormalised_log_pdfs=np.empty((0, N), dtype=float_dtype),
             measurement_ids=np.empty((0,), dtype=id_dtype),
             probe_poses=np.empty((0, 4, 4), dtype=float_dtype),
+            joint_position_obs=np.empty((0, T, 7), dtype=float_dtype),
+            joint_position_sim=np.empty((0, N, T, 7), dtype=float_dtype),
         )
 
     # ---------- Append one measurement (with N particles) ----------
@@ -1150,6 +1154,9 @@ class ContactLocationInferenceResult:
         unnormalised_log_pdfs: np.ndarray,  # (N,)
         measurement_id: int,
         probe_pose: np.ndarray,  # (4, 4)
+        # Joint positions are optional — pass None to store zeros until logging is wired up
+        joint_position_obs: np.ndarray = None,  # (T, 7)
+        joint_position_sim: np.ndarray = None,  # (N, T, 7)
     ) -> None:
         poses = np.asarray(poses)
         times = np.asarray(times)
@@ -1166,6 +1173,13 @@ class ContactLocationInferenceResult:
             if K_curr > 0
             else contact_locations_sim.shape[1]
         )
+
+        if joint_position_obs is None:
+            joint_position_obs = np.zeros((T_expected, 7), dtype=np.float32)
+        if joint_position_sim is None:
+            joint_position_sim = np.zeros((N_expected, T_expected, 7), dtype=np.float32)
+        joint_position_obs = np.asarray(joint_position_obs)
+        joint_position_sim = np.asarray(joint_position_sim)
 
         # Validate shapes
         if poses.shape != (N_expected, 4, 4):
@@ -1192,6 +1206,14 @@ class ContactLocationInferenceResult:
             )
         if probe_pose.shape != (4, 4):
             raise ValueError(f"probe_pose shape {probe_pose.shape} != expected (4, 4)")
+        if joint_position_obs.shape != (T_expected, 7):
+            raise ValueError(
+                f"joint_position_obs shape {joint_position_obs.shape} != expected {(T_expected, 7)}"
+            )
+        if joint_position_sim.shape != (N_expected, T_expected, 7):
+            raise ValueError(
+                f"joint_position_sim shape {joint_position_sim.shape} != expected {(N_expected, T_expected, 7)}"
+            )
 
         # Append along K
         self.poses = np.concatenate([self.poses, poses[None, ...]], axis=0)
@@ -1218,6 +1240,12 @@ class ContactLocationInferenceResult:
         self.probe_poses = np.concatenate(
             [self.probe_poses, probe_pose[None, ...]], axis=0
         )
+        self.joint_position_obs = np.concatenate(
+            [self.joint_position_obs, joint_position_obs[None, ...]], axis=0
+        )
+        self.joint_position_sim = np.concatenate(
+            [self.joint_position_sim, joint_position_sim[None, ...]], axis=0
+        )
 
     # ---------- Accessors ----------
     def get_measurement(self, k: int) -> Dict:
@@ -1231,6 +1259,8 @@ class ContactLocationInferenceResult:
             "unnormalised_log_pdfs": self.unnormalised_log_pdfs[k],
             "measurement_id": int(self.measurement_ids[k]),
             "probe_pose": self.probe_poses[k],
+            "joint_position_obs": self.joint_position_obs[k],
+            "joint_position_sim": self.joint_position_sim[k],
         }
 
     # ---------- I/O ----------
@@ -1246,6 +1276,8 @@ class ContactLocationInferenceResult:
             unnormalised_log_pdfs=self.unnormalised_log_pdfs,
             measurement_ids=self.measurement_ids,
             probe_poses=self.probe_poses,
+            joint_position_obs=self.joint_position_obs,
+            joint_position_sim=self.joint_position_sim,
         )
 
     @classmethod
@@ -1261,6 +1293,8 @@ class ContactLocationInferenceResult:
             unnormalised_log_pdfs=data["unnormalised_log_pdfs"],
             measurement_ids=data["measurement_ids"],
             probe_poses=data["probe_poses"],
+            joint_position_obs=data["joint_position_obs"],
+            joint_position_sim=data["joint_position_sim"],
         )
 
     # ---------- Convenience ----------
@@ -1304,5 +1338,7 @@ class ContactLocationInferenceResult:
             f"  Pose shape: {self.poses.shape}\n"
             f"  Contact locations sim shape: {self.contact_locations_sim.shape}\n"
             f"  Contact locations obs shape: {self.contact_locations_obs.shape}\n"
+            f"  Joint position obs shape: {self.joint_position_obs.shape}\n"
+            f"  Joint position sim shape: {self.joint_position_sim.shape}\n"
             f"  Unnormalised log-pdf range: ({lp_min}, {lp_max})"
         )
