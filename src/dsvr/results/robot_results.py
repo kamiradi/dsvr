@@ -171,6 +171,7 @@ class VisionInferenceResultV3:
     images: np.ndarray
     pixelwise_score: np.ndarray
     measurement_ids: np.ndarray
+    _k: int = field(default=0, init=False, repr=False)
 
     # ---------- Constructors ----------
     @classmethod
@@ -182,19 +183,21 @@ class VisionInferenceResultV3:
         pixelwise_dtype=np.uint8,
         float_dtype=float,
         id_dtype=np.int64,
+        num_measurements: int = 0,
     ) -> "VisionInferenceResult":
         H, W, C = image_shape
         N = int(num_particles)
         if N <= 0:
             raise ValueError("num_particles must be > 0")
 
+        K = int(num_measurements)
         return cls(
-            poses=np.empty((0, N, 4, 4), dtype=float_dtype),
-            times=np.empty((0, N), dtype=float_dtype),
-            unnormalised_log_pdfs=np.empty((0, N), dtype=float_dtype),
-            images=np.empty((0, N, H, W, C), dtype=image_dtype),
-            pixelwise_score=np.empty((0, N, H, W, C), dtype=pixelwise_dtype),
-            measurement_ids=np.empty((0,), dtype=id_dtype),
+            poses=np.empty((K, N, 4, 4), dtype=float_dtype),
+            times=np.empty((K, N), dtype=float_dtype),
+            unnormalised_log_pdfs=np.empty((K, N), dtype=float_dtype),
+            images=np.empty((K, N, H, W, C), dtype=image_dtype),
+            pixelwise_score=np.empty((K, N, H, W, C), dtype=pixelwise_dtype),
+            measurement_ids=np.empty((K,), dtype=id_dtype),
         )
 
     # ---------- Append one measurement (with N particles) ----------
@@ -239,22 +242,34 @@ class VisionInferenceResultV3:
             )
 
         # Append along K (measurement) axis
-        self.poses = np.concatenate([self.poses, poses[None, ...]], axis=0)
-        self.times = np.concatenate([self.times, times[None, ...]], axis=0)
-        self.unnormalised_log_pdfs = np.concatenate(
-            [self.unnormalised_log_pdfs, unnormalised_log_pdfs[None, ...]], axis=0
-        )
-        self.images = np.concatenate([self.images, images[None, ...]], axis=0)
-        self.pixelwise_score = np.concatenate(
-            [self.pixelwise_score, pixelwise_score[None, ...]], axis=0
-        )
-        self.measurement_ids = np.concatenate(
-            [
-                self.measurement_ids,
-                np.array([measurement_id], dtype=self.measurement_ids.dtype),
-            ],
-            axis=0,
-        )
+        if self._k < self.images.shape[0]:
+            # Pre-allocated path: write in-place (no reallocation)
+            self.poses[self._k] = poses
+            self.times[self._k] = times
+            self.unnormalised_log_pdfs[self._k] = unnormalised_log_pdfs
+            self.images[self._k] = images
+            self.pixelwise_score[self._k] = pixelwise_score
+            self.measurement_ids[self._k] = measurement_id
+            self._k += 1
+        else:
+            # Dynamic growth path (fallback when num_measurements not provided)
+            self.poses = np.concatenate([self.poses, poses[None, ...]], axis=0)
+            self.times = np.concatenate([self.times, times[None, ...]], axis=0)
+            self.unnormalised_log_pdfs = np.concatenate(
+                [self.unnormalised_log_pdfs, unnormalised_log_pdfs[None, ...]], axis=0
+            )
+            self.images = np.concatenate([self.images, images[None, ...]], axis=0)
+            self.pixelwise_score = np.concatenate(
+                [self.pixelwise_score, pixelwise_score[None, ...]], axis=0
+            )
+            self.measurement_ids = np.concatenate(
+                [
+                    self.measurement_ids,
+                    np.array([measurement_id], dtype=self.measurement_ids.dtype),
+                ],
+                axis=0,
+            )
+            self._k += 1
 
     # ---------- Accessors ----------
     def get_measurement(self, k: int) -> Dict[str, Any]:
