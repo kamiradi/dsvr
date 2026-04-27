@@ -5,11 +5,12 @@ import numpy as np
 from pathlib import Path
 import yaml
 from dsvr.datasets.robot_data import RoboticsDatasetV2
-from dsvr.results.robot_results import VisionInferenceResultV3
+from dsvr.results.robot_results import VisionInferenceResultV3, ContactResidualResult
 import argparse
 from urllib.parse import quote as _q, unquote as _uq
 import matplotlib.pyplot as plt
 from matplotlib import cm
+import matplotlib.cm as mcm
 from matplotlib.colors import Normalize
 from typing import Dict
 from rerun.urdf import UrdfTree
@@ -74,6 +75,12 @@ ap.add_argument(
     action="store_true",
     help="Visualise segmentation masks (requires RoboticsDatasetV3 with seg_mask data)",
 )
+ap.add_argument(
+    "--contact-residuals",
+    type=str,
+    default=None,
+    help="Path to ContactResidualResult .npz file (optional)",
+)
 args = ap.parse_args()
 
 # Derive experiment name and load config
@@ -107,6 +114,12 @@ if args.seg_mask:
 else:
     ds = RoboticsDatasetV2.load(args.data_npz)
 rr.log("world", rr.ViewCoordinates.RIGHT_HAND_Z_UP, static=True)
+
+# Load contact residuals if provided
+cr = None
+if args.contact_residuals is not None:
+    cr = ContactResidualResult.load(args.contact_residuals)
+    print(f"Contact residuals: {cr.summary()}")
 
 # Load and setup URDF robot visualization
 rr.log_file_from_path(args.urdf, entity_path_prefix=args.root_path, static=True)
@@ -310,6 +323,27 @@ for k in frame_range:
             translation=X_Peg[:3, 3],
         ),
     )
+
+    # Contact residuals: coloured point cloud in world frame
+    if cr is not None:
+        cr_idx = int(np.clip(
+            np.searchsorted(cr.times, d, side="right") - 1,
+            0, cr.T - 1,
+        ))
+        peg_idx = int(np.clip(
+            np.searchsorted(peg_times, d, side="right") - 1,
+            0, len(peg_times) - 1,
+        ))
+        R_peg = peg_mats[peg_idx, :3, :3]
+        t_peg = peg_mats[peg_idx, :3, 3]
+        pts_W = (R_peg @ cr.mesh_points.T).T + t_peg
+        likelihoods = cr.residuals[cr_idx]
+        lo, hi = likelihoods.min(), likelihoods.max()
+        norm_cr = (likelihoods - lo) / max(hi - lo, 1e-6)
+        colors_cr = (mcm.turbo(norm_cr)[:, :3] * 255).astype(np.uint8)
+        rr.log("/world/contact_residuals", rr.Points3D(pts_W, colors=colors_cr, radii=0.001))
+        hist_counts, _ = np.histogram(likelihoods, bins=50)
+        rr.log("/world/contact_residuals/distribution", rr.BarChart(hist_counts.astype(np.float32)))
 
     # Log robot joint states if available
     if ds.joint_states is not None and ds.joint_ts is not None:
