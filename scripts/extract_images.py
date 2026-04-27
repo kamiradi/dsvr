@@ -33,13 +33,13 @@ def main():
 
     # Save depth and color images as PNGs
     for i, (label, depth, color) in enumerate(zip(label_images, depth_images, color_images)):
-        depth_image_path = os.path.join(output_folder, f"/depth/{i:04d}.png")
-        color_image_path = os.path.join(output_folder, f"/rgb/{i:04d}.png")
-        label_image_path = os.path.join(output_folder, f"/masks/{i:04d}.png")
+        depth_image_path = os.path.join(output_folder, f"depth/{i:04d}.png")
+        color_image_path = os.path.join(output_folder, f"rgb/{i:04d}.png")
+        label_image_path = os.path.join(output_folder, f"masks/{i:04d}.png")
 
         # Save depth image (normalize to 0-255 for PNG format)
         depth_normalized = (255 * (depth - depth.min()) / (depth.max() - depth.min())).astype(np.uint8)
-        Image.fromarray(depth_normalized).save(output_folder+depth_image_path)
+        Image.fromarray(depth_normalized).save(depth_image_path)
 
         # label images
         print(np.unique(label, return_counts=True))
@@ -48,10 +48,10 @@ def main():
 
         # Convert to uint8 black and white image
         bw = (seg * 255).astype(np.uint8)
-        Image.fromarray(bw).save(output_folder+label_image_path)
+        Image.fromarray(bw).save(label_image_path)
 
         # Save color image
-        Image.fromarray(color).save(output_folder+color_image_path)
+        Image.fromarray(color).save(color_image_path)
 
     print(f"Images saved to {output_folder}")
 
